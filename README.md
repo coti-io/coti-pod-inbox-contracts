@@ -1,30 +1,45 @@
-[![image](https://img.shields.io/badge/Visit-COTI%20Website-green?style=for-the-badge&logo=internet-explorer)](https://coti.io/)
-[![image](https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://telegram.coti.io)
-[![image](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.coti.io)
-[![image](https://img.shields.io/badge/X-000000?style=for-the-badge&logo=x&logoColor=white)](https://twitter.coti.io)
-[![image](https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtube.coti.io)
-[![COTI Website](https://img.shields.io/badge/COTI%20WEBSITE-4CAF50?style=for-the-badge)](https://coti.io)
-
 # COTI PoD Inbox Contracts
 
-Welcome to COTI PoD inbox Contracts, a library infrastructure of smart contracts for COTI's Privacy on Demand technology.
+Cross-chain **inbox** implementation for the COTI PoD stack: message routing, miner, fee manager, and `MpcAbiCodec`.
 
-## Documentation
+dApp contracts (Privacy Portal, pERC20, PodLib, examples) live in **[coti-contracts](https://github.com/coti-io/coti-contracts)** under `contracts/pod/`.
 
-Full API documentation is available in the [COTI docs](https://docs.coti.io/coti-v2-documentation/build-on-coti/tools/ethers.js)
+Integration tests, deploy orchestration, and the multi-repo dev workspace live in **[pod-ecosystem-integration](https://github.com/coti-io/pod-ecosystem-integration)**.
 
-## Build and Install
+## Layout
+
+| Path | Purpose |
+|------|---------|
+| `contracts/Inbox.sol` | Production inbox (miner + access control) |
+| `contracts/InboxBase.sol` | Core send/receive/request storage |
+| `contracts/InboxMiner.sol` | Batch miner for incoming requests |
+| `contracts/fee/` | Fee manager and price oracle |
+| `contracts/mpccodec/MpcAbiCodec.sol` | MPC method-call encoder (also synced to dApps) |
+| `contracts/IInbox.sol`, `InboxUser.sol` | Stable APIs copied into coti-contracts |
+
+## Sync to coti-contracts
+
+After changing inbox-facing interfaces, push copies to dApp consumers:
+
+```bash
+npm run sync:interfaces -- ../coti-contracts
+# or
+TARGET=../coti-contracts ./scripts/sync-inbox-interfaces.sh
+```
+
+Synced files land in `coti-contracts/contracts/pod/inbox/` with `SYNC_MANIFEST.json` (commit + hashes).
+
+## Develop
 
 ```bash
 npm install
+npx hardhat compile
+npm run test:inbox-events
+npm run test:inbox-fee
 ```
 
-## Testing
+For full-stack work (inbox + dApps + E2E tests), open the **pod-ecosystem-integration** workspace.
 
-```bash
-npx hardhat test
-```
+## Networks
 
----
-
-To report an issue, please see the [issues](https://github.com/coti-io/coti-pod-inbox-contracts/issues/new) tab.
+See `hardhat.config.ts` — Sepolia, Avalanche Fuji, COTI testnet, and local `chain1`/`chain2` simulators for multichain tests.

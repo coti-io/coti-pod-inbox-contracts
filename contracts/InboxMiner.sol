@@ -1,0 +1,235 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
+import "./IInboxMiner.sol";
+import "./InboxBase.sol";
+import "./MinerBase.sol";
+
+/// @title InboxMiner
+/// @notice Miner-driven inbox: ingest mined payloads, execute targets, and collect fees.
+contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGuard {
+    /// @notice When true, {batchProcessRequests} and {retryFailedRequest} revert (circuit breaker).
+    bool public messageProcessingPaused;
+
+    /// @dev `chainId` and the real owner are set later via the {Inbox.init} initializer
+    /// so the creation bytecode is identical across chains (deterministic CreateX deploys).
+    constructor() MinerBase(msg.sender) {}
+
+    /// @notice Pause or unpause inbound message processing (owner-only emergency stop).
+    /// @param paused True to halt {batchProcessRequests} and {retryFailedRequest}.
+    function setMessageProcessingPaused(bool paused) external onlyOwner {
+        messageProcessingPaused = paused;
+        emit MessageProcessingPausedUpdated(paused);
+    }
+
+    /// @inheritdoc IInboxMiner
+    function batchProcessRequests(uint256 sourceChainId, MinedRequest[] memory mined)
+        external
+        onlyMiner
+        nonReentrant
+    {
+        if (messageProcessingPaused) {
+            revert MessageProcessingPaused();
+        }
+        if (sourceChainId == chainId) {
+            revert SourceChainIsThisChain(chainId);
+        }
+
+        uint256 allowedNonce = 1;
+        if (lastIncomingRequestId[sourceChainId] != bytes32(0)) {
+            (,, allowedNonce) = _unpackRequestId(lastIncomingRequestId[sourceChainId]);
+            allowedNonce++;
+        }
+
+        for (uint256 i = 0; i < mined.length;) {
+            MinedRequest memory minedRequest = mined[i];
+            bytes32 requestId = minedRequest.requestId;
+            (uint256 minedChainId, uint256 minedTargetChainId, uint256 minedNonce) = _unpackRequestId(requestId);
+            if (minedChainId != sourceChainId) {
+                revert RequestSourceChainMismatch(requestId, sourceChainId, minedChainId);
+            }
+            if (minedTargetChainId != chainId) {
+                revert RequestTargetChainMismatch(requestId, chainId, minedTargetChainId);
+            }
+            require(minedNonce == allowedNonce, "Inbox: mined nonces must be contiguous");
+            unchecked {
+                ++allowedNonce;
+            }
+            Request storage incomingRequest = incomingRequests[requestId];
+            require(incomingRequest.requestId == bytes32(0), "Inbox: request already processed");
+            require(minedRequest.sourceContract != address(0), "Inbox: invalid source contract");
+            require(minedRequest.targetContract != address(0), "Inbox: invalid target contract");
+
+            Request memory newIncomingRequest = Request({
+                requestId: requestId,
+                targetChainId: sourceChainId,
+                targetContract: minedRequest.targetContract,
+                methodCall: minedRequest.methodCall,
+                callerContract: minedRequest.sourceContract,
+                originalSender: minedRequest.sourceContract,
+                timestamp: uint64(block.timestamp),
+                callbackSelector: minedRequest.callbackSelector,
+                errorSelector: minedRequest.errorSelector,
+                isTwoWay: minedRequest.isTwoWay,
+                executed: false,
+                sourceRequestId: minedRequest.sourceRequestId,
+                targetFee: minedRequest.targetFee,
+                callerFee: minedRequest.callerFee
+            });
+
+            incomingRequests[requestId] = newIncomingRequest;
+            (
+                bytes4 methodSelector,
+                bytes32 methodCallHash,
+                uint256 dataLength,
+                uint16 datatypeCount,
+                uint16 datalenCount
+            ) = _methodCallLogData(minedRequest.methodCall);
+            emit MessageReceived(
+                requestId,
+                sourceChainId,
+                minedRequest.sourceContract,
+                methodSelector,
+                methodCallHash,
+                dataLength,
+                datatypeCount,
+                datalenCount
+            );
+
+            _executeIncomingRequest(incomingRequest, sourceChainId);
+
+            if (incomingRequest.requestId != bytes32(0) && incomingRequest.sourceRequestId != bytes32(0)
+                && !incomingRequest.isTwoWay) {
+                bytes32 originalRequestId = incomingRequest.sourceRequestId;
+                Request storage originalRequest = requests[originalRequestId];
+
+                if (originalRequest.requestId != bytes32(0) && !originalRequest.executed) {
+                    originalRequest.executed = true;
+                    emit IncomingResponseReceived(originalRequestId, incomingRequest.requestId);
+                }
+            }
+            unchecked {
+                ++i;
+            }
+        }
+
+        if (mined.length > 0) {
+            lastIncomingRequestId[sourceChainId] = mined[mined.length - 1].requestId;
+        }
+    }
+
+    /// @notice Configure the oracle used for fee conversion.
+    /// @param oracle {PriceOracle} address.
+    function setPriceOracle(address oracle) external onlyOwner {
+        _setPriceOracle(oracle);
+    }
+
+    /// @notice Update minimum fee templates for local and remote legs.
+    /// @param _local Local leg template.
+    /// @param _remote Remote leg template.
+    function updateMinFeeConfigs(FeeConfig memory _local, FeeConfig memory _remote) external onlyOwner {
+        _updateMinFeeConfigs(_local, _remote);
+    }
+
+    /// @inheritdoc IInboxMiner
+    function collectFees(address payable to) external onlyOwner {
+        _collectFees(to);
+    }
+
+    /// @dev Retries a failed request, if the method execution is failed. Caller pays the execution gas so we don't care about the gas limit.
+    /// @param requestId The ID of the incoming request to retry.
+    function retryFailedRequest(bytes32 requestId) external nonReentrant {
+        if (messageProcessingPaused) {
+            revert MessageProcessingPaused();
+        }
+        if (requestId == bytes32(0)) {
+            revert RequestIdRequired();
+        }
+        Request storage incomingRequest = incomingRequests[requestId];
+        (uint256 sourceChainId,,) = _unpackRequestId(requestId);
+        uint256 errorCode = errors[requestId].errorCode;
+        if (!incomingRequest.executed || errorCode != ERROR_CODE_EXECUTION_FAILED) {
+            revert RetryFailedRequestNotAFailedRequest();
+        }
+
+        _currentContext = ExecutionContext({
+            remoteChainId: sourceChainId,
+            remoteContract: incomingRequest.originalSender,
+            requestId: requestId
+        });
+
+        address targetContract = incomingRequest.targetContract;
+        (bool encodedOk, bytes memory callData, bytes memory encodeErr) = _safeEncodeMethodCall(
+            incomingRequest.methodCall
+        );
+        if (!encodedOk) {
+            _recordEncodeError(requestId, encodeErr);
+            _currentContext = ExecutionContext({remoteChainId: 0, remoteContract: address(0), requestId: bytes32(0)});
+            return;
+        }
+
+        bool success;
+        bytes memory returnData;
+        (success, returnData) = targetContract.call(callData);
+        _currentContext = ExecutionContext({remoteChainId: 0, remoteContract: address(0), requestId: bytes32(0)});
+
+        if (!success) {
+            revert RetryFailedRequestExecutionFailed(returnData);
+        }
+
+        delete errors[requestId];
+        emit RetryFailedRequestSuccess(requestId);
+    }
+
+    /// @dev Executes one mined request: encode calldata, call target with `gas` from `targetFee`, record errors.
+    /// @param incomingRequest Storage ref to the incoming request.
+    /// @param sourceChainId Chain that sent the request.
+    function _executeIncomingRequest(Request storage incomingRequest, uint256 sourceChainId) internal {
+        _currentContext = ExecutionContext({
+            remoteChainId: sourceChainId,
+            remoteContract: incomingRequest.originalSender,
+            requestId: incomingRequest.requestId
+        });
+
+        address targetContract = incomingRequest.targetContract;
+        (bool encodedOk, bytes memory callData, bytes memory encodeErr) = _safeEncodeMethodCall(
+            incomingRequest.methodCall
+        );
+
+        if (!encodedOk) {
+            _recordEncodeError(incomingRequest.requestId, encodeErr);
+
+            _currentContext = ExecutionContext({remoteChainId: 0, remoteContract: address(0), requestId: bytes32(0)});
+
+            incomingRequest.executed = true;
+            return;
+        }
+
+        uint256 targetGasBudget = _localRequestExecutionBudget(incomingRequest.targetFee);
+        uint256 gasBeforeSubcall = gasleft();
+
+        bool success;
+        bytes memory returnData;
+        (success, returnData) = targetContract.call{gas: targetGasBudget}(callData);
+
+        uint256 gasUsed = gasBeforeSubcall - gasleft();
+        uint256 gasRemainingApprox = targetGasBudget > gasUsed ? targetGasBudget - gasUsed : 0;
+        emit FeeExecutionSettled(incomingRequest.requestId, gasUsed, gasRemainingApprox);
+
+        _currentContext = ExecutionContext({remoteChainId: 0, remoteContract: address(0), requestId: bytes32(0)});
+
+        incomingRequest.executed = true;
+
+        if (!success) {
+            bytes32 rid = incomingRequest.requestId;
+            errors[rid] = Error({
+                requestId: rid,
+                errorCode: ERROR_CODE_EXECUTION_FAILED,
+                errorMessage: returnData
+            });
+            emit ErrorReceived(rid, ERROR_CODE_EXECUTION_FAILED, returnData);
+        }
+    }
+}

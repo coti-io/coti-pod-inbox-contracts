@@ -1,0 +1,45 @@
+{
+  "name": "@coti-io/coti-pod-inbox-contracts",
+  "version": "1.0.0",
+  "description": "COTI PoD cross-chain inbox: implementation, fee manager, MPC ABI codec, and miner.",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/coti-io/coti-pod-inbox-contracts.git"
+  },
+  "scripts": {
+    "postinstall": "patch-package && bash scripts/link-external-deps.sh",
+    "node:chain1": "HARDHAT_CHAIN_ID=31337 hardhat node --port 8545",
+    "node:chain2": "HARDHAT_CHAIN_ID=31338 hardhat node --port 8546",
+    "deploy:inbox": "hardhat run scripts/deploy-inbox.ts",
+    "deploy:inbox:avax": "hardhat run scripts/deploy-inbox.ts --network avalancheFuji",
+    "deploy:inbox:sepolia": "hardhat run scripts/deploy-inbox.ts --network sepolia",
+    "deploy:oracle": "hardhat run scripts/deploy-oracle.ts",
+    "deploy:inbox:coti": "hardhat run scripts/deploy-inbox-with-executor.ts --network cotiTestnet",
+    "test": "hardhat test",
+    "test:inbox-fee": "NODE_OPTIONS='--max-old-space-size=8192' hardhat test test/InboxFeeCalculation.ts",
+    "test:inbox-gas": "hardhat run scripts/inbox-gas-matrix.ts",
+    "test:inbox-events": "hardhat test test/InboxCompactEvents.ts",
+    "test:inbox-raise": "hardhat test test/inbox-raise.ts",
+    "test:codec": "hardhat test test/mpc-abi-codec-128.ts test/mpc-abi-codec-256.ts",
+    "relay": "tsx scripts/relay-node.ts",
+    "link:deps": "bash scripts/link-external-deps.sh",
+    "sync:interfaces": "bash scripts/sync-inbox-interfaces.sh"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ignition": "^3.0.6",
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.1",
+    "@types/node": "^22.19.5",
+    "dotenv": "^17.4.2",
+    "ethers": "^6.15.0",
+    "hardhat": "^3.1.3",
+    "patch-package": "^8.0.1",
+    "solc": "0.8.28",
+    "tsx": "^4.19.2",
+    "typescript": "~5.8.0",
+    "viem": "^2.44.1"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.4.0"
+  }
+}
