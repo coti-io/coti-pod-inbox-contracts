@@ -5,7 +5,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title MinerBase
 /// @notice Ownable registry of addresses allowed to call miner-only inbox functions.
-contract MinerBase is Ownable {
+abstract contract MinerBase is Ownable {
     mapping(address => bool) private _miners;
 
     /// @notice Miner address was registered by the owner.
@@ -19,9 +19,6 @@ contract MinerBase is Ownable {
         require(_miners[msg.sender], "MinerBase: caller is not a miner");
         _;
     }
-
-    /// @param initialOwner Initial {Ownable} owner.
-    constructor(address initialOwner) Ownable(initialOwner) {}
 
     /// @notice Register a miner address.
     /// @param miner Address allowed to mine.

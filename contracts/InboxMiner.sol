@@ -9,13 +9,9 @@ import "./MinerBase.sol";
 
 /// @title InboxMiner
 /// @notice Miner-driven inbox: ingest mined payloads, execute targets, and collect fees.
-contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGuard {
+abstract contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGuard {
     /// @notice When true, {batchProcessRequests} and {retryFailedRequest} revert (circuit breaker).
     bool public messageProcessingPaused;
-
-    /// @dev `chainId` and the real owner are set later via the {Inbox.init} initializer
-    /// so the creation bytecode is identical across chains (deterministic CreateX deploys).
-    constructor() MinerBase(msg.sender) {}
 
     /// @notice Pause or unpause inbound message processing (owner-only emergency stop).
     /// @param paused True to halt {batchProcessRequests} and {retryFailedRequest}.
