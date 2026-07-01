@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { encodeAbiParameters, keccak256, toHex } from "viem";
+import { encodeAbiParameters, decodeEventLog, keccak256, toHex } from "viem";
 import { network } from "hardhat";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
@@ -19,6 +19,16 @@ const CONSTANT_FEE = {
   bufferRatioX10000: 0n,
 } as const;
 
+const MPC_METHOD_CALL_TYPE = {
+  type: "tuple",
+  components: [
+    { name: "selector", type: "bytes4" },
+    { name: "data", type: "bytes" },
+    { name: "datatypes", type: "bytes8[]" },
+    { name: "datalens", type: "bytes32[]" },
+  ],
+} as const;
+
 const methodCallHash = (methodCall: {
   selector: `0x${string}`;
   data: `0x${string}`;
@@ -27,13 +37,15 @@ const methodCallHash = (methodCall: {
 }) =>
   keccak256(
     encodeAbiParameters(
+      [MPC_METHOD_CALL_TYPE],
       [
-        { type: "bytes4" },
-        { type: "bytes" },
-        { type: "bytes8[]" },
-        { type: "bytes32[]" },
-      ],
-      [methodCall.selector, methodCall.data, [...methodCall.datatypes], [...methodCall.datalens]]
+        {
+          selector: methodCall.selector,
+          data: methodCall.data,
+          datatypes: [...methodCall.datatypes],
+          datalens: [...methodCall.datalens],
+        },
+      ]
     )
   );
 
@@ -76,7 +88,7 @@ describe("Inbox compact message events", { concurrency: false, timeout: 600_000 
     const sentLog = receipt.logs.find((log) => log.topics.length === 4);
     assert.ok(sentLog, "MessageSent log not found");
 
-    const decoded = await publicClient.decodeEventLog({
+    const decoded = decodeEventLog({
       abi: inbox.abi,
       data: sentLog.data,
       topics: sentLog.topics,
@@ -163,7 +175,7 @@ describe("Inbox compact message events", { concurrency: false, timeout: 600_000 
     const receivedLog = receipt.logs.find((log) => log.topics.length === 4 && log.address === target.address);
     assert.ok(receivedLog, "MessageReceived log not found");
 
-    const decoded = await publicClient.decodeEventLog({
+    const decoded = decodeEventLog({
       abi: target.abi,
       data: receivedLog.data,
       topics: receivedLog.topics,
