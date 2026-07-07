@@ -114,7 +114,7 @@ contract InboxBase is IInbox, InboxFeeManager {
         requestId = _sendTwoWayMessage(
             targetChainId, targetContract, methodCall, callbackSelector, errorSelector, targetFeeGas, callerFeeGas
         );
-        priceOracle.fetchPrices();
+        priceOracle.refreshCache();
     }
 
     /// @inheritdoc IInbox

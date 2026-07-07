@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { defineChain, parseUnits, zeroAddress, createPublicClient, http, type PublicClient, type WalletClient } from "viem";
+import { oracleTokensForChain } from "./oracle-tokens.js";
 import {
   deployInboxDeterministic as deployInboxViaCreateX,
   type DeployInboxDeterministicResult,
   type InboxArtifact,
 } from "./createx.js";
+import { MANUAL_USD_PEG_18, usdcUnderlyingForChain } from "./oracle-pegs.js";
 
 /** Etherscan requires the full solc commit suffix; Hardhat build-info may omit it. */
 export const patchBuildInfoSolcLongVersion = (longVersion = "0.8.28+commit.7893614a") => {
@@ -163,6 +165,89 @@ export const oracleUsdPricesForChain = (chainId: number): OracleUsdLegs => {
 /** @deprecated Use {@link oracleUsdPricesForChain} */
 export const oracleLegsForChain = (chainId: number): OracleUsdLegs => oracleUsdPricesForChain(chainId);
 
+/** Chainlink Data Feed addresses (verify at https://docs.chain.link/data-feeds/price-feeds/addresses). */
+export const CHAINLINK_FEEDS = {
+  /** Sepolia ETH/USD */
+  sepoliaEthUsd: "0x694AA1769357215DE4FAC081bf1f309aDC325306" as const,
+  /** Ethereum mainnet ETH/USD */
+  mainnetEthUsd: "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419" as const,
+  /** Avalanche Fuji AVAX/USD (Chainlink EACAggregatorProxy). */
+  fujiAvaxUsd: "0x5498BB86BC934c8D34FDA08E81D444153d0D06aD" as const,
+  /** Avalanche mainnet AVAX/USD */
+  mainnetAvaxUsd: "0x0A77230d17318075983913bC2145DB16C7366156" as const,
+} as const;
+
+export type ChainlinkFeedConfig = {
+  localFeed: `0x${string}`;
+  remoteFeed: `0x${string}`;
+  /** Which leg uses manual admin price (COTI — no Chainlink feed). */
+  manualLeg: "local" | "remote" | "both";
+  maxStalenessSeconds: bigint;
+  fetchIntervalSeconds: bigint;
+};
+
+/**
+ * Chainlink feed wiring per chain. Zero feed = manual-only leg (COTI or cross-chain ETH on COTI).
+ * Local = this chain native; remote = paired chain native.
+ */
+export const chainlinkFeedsForChain = (chainId: number): ChainlinkFeedConfig => {
+  const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
+  const testnetStaleness = 86_400n;
+  const mainnetStaleness = 3_600n;
+  const fetchInterval = 300n;
+
+  if (chainId === 11155111 || chainId === 31337) {
+    return {
+      localFeed: CHAINLINK_FEEDS.sepoliaEthUsd,
+      remoteFeed: zeroAddress,
+      manualLeg: "remote",
+      maxStalenessSeconds: testnetStaleness,
+      fetchIntervalSeconds: fetchInterval,
+    };
+  }
+  if (chainId === AVALANCHE_FUJI_CHAIN_ID) {
+    return {
+      localFeed: CHAINLINK_FEEDS.fujiAvaxUsd,
+      remoteFeed: zeroAddress,
+      manualLeg: "remote",
+      maxStalenessSeconds: testnetStaleness,
+      fetchIntervalSeconds: fetchInterval,
+    };
+  }
+  if (chainId === cotiTestnetId) {
+    return {
+      localFeed: zeroAddress,
+      remoteFeed: zeroAddress,
+      manualLeg: "both",
+      maxStalenessSeconds: testnetStaleness,
+      fetchIntervalSeconds: fetchInterval,
+    };
+  }
+  if (chainId === 1) {
+    return {
+      localFeed: CHAINLINK_FEEDS.mainnetEthUsd,
+      remoteFeed: zeroAddress,
+      manualLeg: "remote",
+      maxStalenessSeconds: mainnetStaleness,
+      fetchIntervalSeconds: fetchInterval,
+    };
+  }
+  if (chainId === 43_114) {
+    return {
+      localFeed: CHAINLINK_FEEDS.mainnetAvaxUsd,
+      remoteFeed: zeroAddress,
+      manualLeg: "remote",
+      maxStalenessSeconds: mainnetStaleness,
+      fetchIntervalSeconds: fetchInterval,
+    };
+  }
+  throw new Error(
+    `Unsupported chainId ${chainId} for Chainlink feeds. ` +
+      `Use Sepolia (11155111), Fuji (${AVALANCHE_FUJI_CHAIN_ID}), COTI testnet (${cotiTestnetId}), ` +
+      `Ethereum (1), Avalanche (43114), or local (31337).`
+  );
+};
+
 /**
  * Sepolia-side fee template (variable minimum): `constantFee == 0` and all template fields non-zero.
  * Used as **local** on Sepolia and as **remote** on COTI when paired with {@link FEE_CONFIG_COTI_SIDE}.
@@ -317,6 +402,10 @@ export const deployTestnetPriceOracle = async (params: DeployOracleParams) => {
     account: deployer,
   });
 
+  const { localToken, remoteToken } = oracleTokensForChain(chainId);
+  const h0 = await oracle.write.setInboxTokens([localToken, remoteToken], writeOpts);
+  await waitMined(publicClient, h0);
+
   const h1 = await oracle.write.setLocalTokenPriceUSD([localUsd18], writeOpts);
   await waitMined(publicClient, h1);
   const h2 = await oracle.write.setRemoteTokenPriceUSD([remoteUsd18], writeOpts);
@@ -341,6 +430,97 @@ export const deployTestnetPriceOracle = async (params: DeployOracleParams) => {
   }
 
   return oracle as { address: `0x${string}`; read: { getPricesUSD: () => Promise<readonly [bigint, bigint]> } };
+};
+
+type ChainlinkOracleContract = {
+  address: `0x${string}`;
+  read: { getPricesUSD: () => Promise<readonly [bigint, bigint]> };
+  write: {
+    setLocalTokenPriceUSD: (args: [bigint], options?: { account: `0x${string}`; gas?: bigint }) => Promise<`0x${string}`>;
+    setRemoteTokenPriceUSD: (args: [bigint], options?: { account: `0x${string}`; gas?: bigint }) => Promise<`0x${string}`>;
+    refreshCache: (args: [], options?: { account: `0x${string}` }) => Promise<`0x${string}`>;
+    setTokenPriceUSD: (
+      args: [`0x${string}`, bigint],
+      options?: { account: `0x${string}`; gas?: bigint }
+    ) => Promise<`0x${string}`>;
+  };
+};
+
+/**
+ * Deploys {ChainlinkLiveOracle} + {PoDPriceOracle}, seeds feeds and manual legs.
+ */
+export const deployChainlinkPriceOracle = async (params: DeployOracleParams): Promise<ChainlinkOracleContract> => {
+  const { viem, publicClient, walletClient, chainId } = params;
+  const deployer = await resolveDeployerAddress(walletClient);
+  const writeOpts = { account: deployer, gas: COTI_ADMIN_WRITE_GAS };
+  const feeds = chainlinkFeedsForChain(chainId);
+  const { localUsd18, remoteUsd18 } = oracleUsdPricesForChain(chainId);
+
+  const { localToken, remoteToken, portalNative: _portalNative } = oracleTokensForChain(chainId);
+
+  const liveAdapter = await viem.deployContract(
+    "ChainlinkLiveOracle",
+    [deployer, feeds.maxStalenessSeconds],
+    { client: { public: publicClient, wallet: walletClient }, account: deployer }
+  );
+  if (feeds.localFeed !== zeroAddress) {
+    await liveAdapter.write.setFeed([localToken, feeds.localFeed], writeOpts);
+  }
+  if (feeds.remoteFeed !== zeroAddress) {
+    await liveAdapter.write.setFeed([remoteToken, feeds.remoteFeed], writeOpts);
+  }
+
+  const oracle = (await viem.deployContract(
+    "PoDPriceOracle",
+    [deployer, liveAdapter.address, feeds.fetchIntervalSeconds],
+    { client: { public: publicClient, wallet: walletClient }, account: deployer }
+  )) as ChainlinkOracleContract;
+
+  await oracle.write.setInboxTokens([localToken, remoteToken], writeOpts);
+
+  if (feeds.manualLeg === "local" || feeds.manualLeg === "both") {
+    const h = await oracle.write.setLocalTokenPriceUSD([localUsd18], writeOpts);
+    await waitMined(publicClient, h);
+  }
+  if (feeds.manualLeg === "remote" || feeds.manualLeg === "both") {
+    const h = await oracle.write.setRemoteTokenPriceUSD([remoteUsd18], writeOpts);
+    await waitMined(publicClient, h);
+  }
+
+  if (feeds.localFeed !== zeroAddress || feeds.remoteFeed !== zeroAddress) {
+    const h = await oracle.write.refreshCache([], writeOpts);
+    await waitMined(publicClient, h);
+  }
+
+  const [localStored, remoteStored] = await oracle.read.getPricesUSD();
+  if (localStored === 0n || remoteStored === 0n) {
+    throw new Error(
+      `PoDPriceOracle legs not seeded (local=${localStored} remote=${remoteStored} chainId=${chainId})`
+    );
+  }
+
+  const usdc = await seedUsdcManualPeg({ oracle, chainId, publicClient, writeOpts });
+  if (usdc) {
+    console.log(`[deployChainlinkPriceOracle] USDC manual $1 peg set for ${usdc}`);
+  }
+
+  return oracle;
+};
+
+/** Set manual $1 USD peg for canonical USDC on this chain (no Chainlink USDC/USD feed). */
+export const seedUsdcManualPeg = async (params: {
+  oracle: ChainlinkOracleContract;
+  chainId: number;
+  publicClient: unknown;
+  writeOpts: { account: `0x${string}`; gas?: bigint };
+}): Promise<`0x${string}` | undefined> => {
+  const usdc = usdcUnderlyingForChain(params.chainId);
+  if (!usdc) {
+    return undefined;
+  }
+  const hash = await params.oracle.write.setTokenPriceUSD([usdc, MANUAL_USD_PEG_18], params.writeOpts);
+  await waitMined(params.publicClient, hash);
+  return usdc;
 };
 
 /**

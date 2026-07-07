@@ -1,5 +1,6 @@
 import { encodeFunctionData, zeroHash } from "viem";
 import { network } from "hardhat";
+import { oracleTokensForChain } from "./oracle-tokens.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -44,6 +45,8 @@ const main = async () => {
       const oracle = await viem.deployContract("PriceOracle", [deployer], {
         client: { public: publicClient, wallet },
       });
+      const { localToken, remoteToken } = oracleTokensForChain(31337);
+      await oracle.write.setInboxTokens([localToken, remoteToken], { account: deployer });
       await oracle.write.setLocalTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
       await oracle.write.setRemoteTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
       await inbox.write.setPriceOracle([oracle.address], { account: deployer });

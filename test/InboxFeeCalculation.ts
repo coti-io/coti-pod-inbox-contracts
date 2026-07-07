@@ -7,6 +7,7 @@ import {
   TESTNET_ETH_USD,
   usdPerWholeToken18,
 } from "../scripts/deploy-utils.js";
+import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 
 /** Same as `mpc-test-utils.receiptWaitOptions` — avoid importing full mpc-test-utils (coti-ethers, etc.) in this file. */
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
@@ -196,6 +197,8 @@ describe(
         client: { public: publicClient, wallet },
       });
       const w = { account: deployer } as const;
+      const { localToken, remoteToken } = oracleTokensForChain(31337);
+      await oracle.write.setInboxTokens([localToken, remoteToken], w);
       logStep(`PriceOracle: setLocalTokenPriceUSD(${localUsd18}) setRemoteTokenPriceUSD(${remoteUsd18})`);
       await oracle.write.setLocalTokenPriceUSD([localUsd18], w);
       await oracle.write.setRemoteTokenPriceUSD([remoteUsd18], w);
