@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { encodeAbiParameters, decodeEventLog, keccak256, toHex } from "viem";
 import { network } from "hardhat";
+import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -68,6 +69,8 @@ describe("Inbox compact message events", { concurrency: false, timeout: 600_000 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
     });
+    const { localToken, remoteToken } = oracleTokensForChain(31337);
+    await oracle.write.setInboxTokens([localToken, remoteToken], { account: deployer });
     await oracle.write.setLocalTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
     await oracle.write.setRemoteTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
     await inbox.write.setPriceOracle([oracle.address], { account: deployer });
@@ -124,6 +127,8 @@ describe("Inbox compact message events", { concurrency: false, timeout: 600_000 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
     });
+    const { localToken, remoteToken } = oracleTokensForChain(31337);
+    await oracle.write.setInboxTokens([localToken, remoteToken], { account: deployer });
     await oracle.write.setLocalTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
     await oracle.write.setRemoteTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
     await source.write.setPriceOracle([oracle.address], { account: deployer });

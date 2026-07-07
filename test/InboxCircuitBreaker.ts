@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
 import { network } from "hardhat";
 import { receiptWaitOptions } from "../system/mpc-test-utils.js";
+import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 
 describe("Inbox circuit breaker and oracle guards", { concurrency: 1 }, async function () {
   const { viem } = await network.connect({ network: "hardhat" });
@@ -49,8 +50,9 @@ describe("Inbox circuit breaker and oracle guards", { concurrency: 1 }, async fu
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
     });
+    const { localToken, remoteToken } = oracleTokensForChain(31337);
+    await oracle.write.setInboxTokens([localToken, remoteToken], { account: deployer });
     await oracle.write.setLocalTokenPriceUSD([10n ** 18n], { account: deployer });
-    await oracle.write.setRemoteTokenPriceUSD([0n], { account: deployer });
     await assert.rejects(
       inbox.write.setPriceOracle([oracle.address], { account: deployer }),
       /OraclePriceZero/

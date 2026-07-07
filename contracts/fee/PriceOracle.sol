@@ -4,26 +4,38 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title PriceOracle
-/// @notice Base oracle: cached 18-decimal USD-stable prices per wei, optional time-based pull interval, and admin overrides.
-/// @dev Subclasses override {fetchLocalTokenPriceUSD} / {fetchRemoteTokenPriceUSD} to refresh from feeds.
+/// @notice Cached USD oracle for inbox fee conversion.
+/// @dev Inbox reads cache only; {PoDPriceOracle} adds live adapter reads for the portal.
 contract PriceOracle is Ownable {
-    /// @notice Price is stored with 18 decimals of precision
+    /// @notice Price is stored with 18 decimals of precision.
     uint256 public constant PRICE_SCALE = 10 ** 18;
 
-    /// @notice Minimum seconds between successful pulls in {fetchPrices}. Zero disables the time gate.
+    /// @notice Minimum seconds between successful cache refreshes. Zero disables the time gate.
     uint256 public fetchInterval;
 
-    /// @notice Timestamp of the last successful pull or admin set.
+    /// @notice Timestamp of the last successful refresh or admin set.
     uint256 public lastFetchTimestamp;
 
-    /// @notice Cached local execution token price.
-    uint256 public localTokenPriceUSD;
+    /// @notice Local execution-chain token whose USD price is cached for inbox fees.
+    address public localToken;
 
-    /// @notice Cached remote execution token price.
-    uint256 public remoteTokenPriceUSD;
+    /// @notice Remote paired-chain token whose USD price is cached for inbox fees.
+    address public remoteToken;
 
-    /// @notice Address allowed to set prices directly (in addition to {fetchPrices}).
+    /// @notice Cached USD price per inbox leg token (18 decimals per whole token).
+    mapping(address => uint256) public cachedPriceUSD;
+
+    /// @notice Address allowed to set manual prices (in addition to {refreshCache}).
     address public priceAdmin;
+
+    /// @notice USD price of zero is not a valid peg.
+    error ZeroUsdPrice();
+
+    /// @notice Token address was zero.
+    error ZeroToken();
+
+    /// @notice Token is not a configured inbox leg.
+    error UnknownToken(address token);
 
     /// @notice Caller is not the configured price admin.
     error NotPriceAdmin();
@@ -36,89 +48,128 @@ contract PriceOracle is Ownable {
         _;
     }
 
-    /// @param initialOwner {Ownable} owner; also initial {priceAdmin} so prices can be set without a separate admin tx.
+    /// @param initialOwner {Ownable} owner; also initial {priceAdmin}.
     constructor(address initialOwner) Ownable(initialOwner) {
         priceAdmin = initialOwner;
     }
 
-    /// @notice Refresh cached prices when the time gate allows.
-    /// @dev Interval checks are cheap storage reads only. Inbox fee paths use {getLocalTokenPriceUSD}/{getRemoteTokenPriceUSD} only (no pull). Use {previewFetchPrices} with `estimateGas` when budgeting `fetchPrices`.
-    function fetchPrices() external {
+    /// @notice Configure inbox leg tokens (e.g. WETH local, COTI remote).
+    function setInboxTokens(address localToken_, address remoteToken_) external onlyOwner {
+        if (localToken_ == address(0) || remoteToken_ == address(0)) {
+            revert ZeroToken();
+        }
+        localToken = localToken_;
+        remoteToken = remoteToken_;
+    }
+
+    /// @notice Cached USD price for an inbox leg token.
+    function getCachedPrice(address token) public view virtual returns (uint256 priceUsd) {
+        if (token == localToken || token == remoteToken) {
+            return cachedPriceUSD[token];
+        }
+        revert UnknownToken(token);
+    }
+
+    /// @notice Live USD price for `token` (defaults to cache on the base oracle).
+    function getLivePrice(address token) public view virtual returns (uint256 priceUsd) {
+        return getCachedPrice(token);
+    }
+
+    /// @notice Refresh both inbox cache legs when the interval gate allows.
+    function refreshCache() public {
+        _refreshInboxCache();
+    }
+
+    /// @notice Refresh one inbox leg when the interval gate allows.
+    function refreshCache(address token) external {
+        if (token != localToken && token != remoteToken) {
+            revert UnknownToken(token);
+        }
         if (!_fetchIntervalsElapsed()) {
             return;
         }
-
         lastFetchTimestamp = block.timestamp;
-        localTokenPriceUSD = fetchLocalTokenPriceUSD();
-        remoteTokenPriceUSD = fetchRemoteTokenPriceUSD();
+        cachedPriceUSD[token] = _pullCachedPrice(token);
+        _afterRefreshCache();
     }
 
-    /// @notice Minimum seconds between pulls.
-    /// @param secondsBetweenFetches New interval (0 = off).
+    function _refreshInboxCache() internal {
+        if (!_fetchIntervalsElapsed()) {
+            return;
+        }
+        lastFetchTimestamp = block.timestamp;
+        if (localToken != address(0)) {
+            cachedPriceUSD[localToken] = _pullCachedPrice(localToken);
+        }
+        if (remoteToken != address(0)) {
+            cachedPriceUSD[remoteToken] = _pullCachedPrice(remoteToken);
+        }
+        _afterRefreshCache();
+    }
+
+    /// @notice Cached local and remote inbox leg prices.
+    function getPricesUSD() external view returns (uint256 localPrice, uint256 remotePrice) {
+        return (cachedPriceUSD[localToken], cachedPriceUSD[remoteToken]);
+    }
+
+    /// @notice Cached local leg price.
+    function getLocalTokenPriceUSD() external view returns (uint256 price) {
+        return cachedPriceUSD[localToken];
+    }
+
+    /// @notice Cached remote leg price.
+    function getRemoteTokenPriceUSD() external view returns (uint256 price) {
+        return cachedPriceUSD[remoteToken];
+    }
+
+    /// @notice Whether {refreshCache} would update storage at this block.
+    function previewRefreshCache() external view returns (bool canRefresh) {
+        return _fetchIntervalsElapsed();
+    }
+
+    /// @notice Minimum seconds between cache refreshes.
     function setFetchInterval(uint256 secondsBetweenFetches) external onlyOwner {
         fetchInterval = secondsBetweenFetches;
     }
 
-    /// @notice Set the address allowed to call {setLocalTokenPriceUSD} / {setRemoteTokenPriceUSD}.
-    /// @param admin Price admin address.
+    /// @notice Set the address allowed to set manual inbox prices.
     function setPriceAdmin(address admin) external onlyOwner {
         priceAdmin = admin;
     }
 
-    /// @notice Manually set the local token price (also updates {lastFetchTimestamp}).
-    /// @param price with 18 decimals of precision
+    /// @notice Manually set the cached local inbox price.
     function setLocalTokenPriceUSD(uint256 price) external onlyPriceAdmin {
-        localTokenPriceUSD = price;
-        lastFetchTimestamp = block.timestamp;
+        _setCachedPrice(localToken, price);
     }
 
-    /// @notice Manually set the remote token price (also updates {lastFetchTimestamp}).
-    /// @param price with 18 decimals of precision
+    /// @notice Manually set the cached remote inbox price.
     function setRemoteTokenPriceUSD(uint256 price) external onlyPriceAdmin {
-        remoteTokenPriceUSD = price;
+        _setCachedPrice(remoteToken, price);
+    }
+
+    /// @dev Hook after {refreshCache}; subclasses may refresh additional state.
+    function _afterRefreshCache() internal virtual {}
+
+    /// @dev Pull a fresh value for an inbox leg token.
+    function _pullCachedPrice(address token) internal view virtual returns (uint256) {
+        return cachedPriceUSD[token];
+    }
+
+    function _setCachedPrice(address token, uint256 price) internal {
+        if (token == address(0)) {
+            revert ZeroToken();
+        }
+        if (price == 0) {
+            revert ZeroUsdPrice();
+        }
+        cachedPriceUSD[token] = price;
         lastFetchTimestamp = block.timestamp;
     }
 
-    /// @notice Cached local token price (read-only for fee logic).
-    /// @return price with 18 decimals of precision
-    function getLocalTokenPriceUSD() external view returns (uint256 price) {
-        return localTokenPriceUSD;
-    }
-
-    /// @notice Cached remote token price (read-only for fee logic).
-    /// @return price with 18 decimals of precision
-    function getRemoteTokenPriceUSD() external view returns (uint256 price) {
-        return remoteTokenPriceUSD;
-    }
-
-    /// @notice Get the local and remote token prices in USD.
-    /// @return localPrice Local token price in USD.
-    /// @return remotePrice Remote token price in USD.
-    function getPricesUSD() external view returns (uint256 localPrice, uint256 remotePrice) {
-        return (localTokenPriceUSD, remoteTokenPriceUSD);
-    }
-
-    /// @notice Whether {fetchPrices} would update storage at this block.
-    /// @return canFetch True if the time gate passes.
-    function previewFetchPrices() external view returns (bool canFetch) {
-        return _fetchIntervalsElapsed();
-    }
-
-    /// @dev True if enough time has passed since {lastFetchTimestamp} for a pull.
     function _fetchIntervalsElapsed() internal view returns (bool) {
         if (fetchInterval != 0 && lastFetchTimestamp != 0 && block.timestamp - lastFetchTimestamp < fetchInterval) {
             return false;
         }
         return true;
-    }
-
-    /// @dev Override to pull local token price; default returns the cache.
-    function fetchLocalTokenPriceUSD() internal view virtual returns (uint256) {
-        return localTokenPriceUSD;
-    }
-
-    /// @dev Override to pull remote token price; default returns the cache.
-    function fetchRemoteTokenPriceUSD() internal view virtual returns (uint256) {
-        return remoteTokenPriceUSD;
     }
 }

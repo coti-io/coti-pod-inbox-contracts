@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { network } from "hardhat";
+import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 
 /**
  * Regression test for per-target request isolation (>2 chains).
@@ -64,6 +65,8 @@ describe("Inbox per-target request isolation (>2 chains)", { concurrency: false,
       const oracle = await viem.deployContract("PriceOracle", [deployer], {
         client: { public: publicClient, wallet },
       });
+      const { localToken, remoteToken } = oracleTokensForChain(31337);
+      await oracle.write.setInboxTokens([localToken, remoteToken], { account: deployer });
       await oracle.write.setLocalTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
       await oracle.write.setRemoteTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
       await inbox.write.setPriceOracle([oracle.address], { account: deployer });
