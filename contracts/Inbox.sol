@@ -13,7 +13,9 @@ import "./InboxMiner.sol";
 /// `chainId` and the real owner are configured once through {init}.
 /// Split deploy-then-initialize is unsafe; use CreateX `deployCreate3AndInit` or an equivalent atomic path.
 contract Inbox is InboxMiner, Initializable {
-    constructor() InboxMiner() {}
+    /// @dev `Ownable` needs a non-zero initial owner; the contract briefly owns itself until
+    /// {init} calls `_transferOwnership`, so bytecode still has no external-address dependency.
+    constructor() InboxMiner() Ownable(address(this)) {}
 
     /// @notice One-time initializer: sets `chainId` and the owner.
     /// @dev Intended to run atomically inside CreateX `deployCreate3AndInit` (no front-run window).
