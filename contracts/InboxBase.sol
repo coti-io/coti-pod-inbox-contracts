@@ -124,10 +124,13 @@ contract InboxBase is IInbox, InboxFeeManager {
         MpcMethodCall calldata methodCall,
         bytes4 errorSelector
     ) external payable returns (bytes32 requestId) {
+        if (errorSelector != bytes4(0)) {
+            revert OneWayErrorSelectorNotSupported(errorSelector);
+        }
         uint256 dataSize = abi.encode(methodCall).length;
         uint256 targetFeeGas = validateAndPrepareOneWayFees(dataSize, msg.value);
         requestId = _sendOneWayMessage(
-            targetChainId, targetContract, methodCall, errorSelector, bytes32(0), targetFeeGas, 0, msg.sender
+            targetChainId, targetContract, methodCall, bytes4(0), bytes32(0), targetFeeGas, 0, msg.sender
         );
         priceOracle.refreshCache();
     }

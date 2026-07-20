@@ -81,7 +81,7 @@ describe("Inbox per-target request isolation (>2 chains)", { concurrency: false,
     targetChainId: bigint
   ) => {
     const hash = await inbox.write.sendOneWayMessage(
-      [targetChainId, env.deployer, minimalMethodCall(), "0xcafebabe"],
+      [targetChainId, env.deployer, minimalMethodCall(), "0x00000000"],
       { account: env.deployer, value: SEND_VALUE_WEI, gasPrice: GAS_PRICE_WEI }
     );
     await env.publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
