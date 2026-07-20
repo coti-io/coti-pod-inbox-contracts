@@ -64,7 +64,10 @@ interface IInbox {
         bytes4 errorSelector;
         /// @notice True when a success response is expected.
         bool isTwoWay;
-        /// @notice True after an incoming request or linked response has been processed.
+        /// @notice True after the inbox has processed this request (execution attempted) or, for an
+        ///         original outbound two-way, after a linked return/error leg was *received*.
+        /// @dev Does **not** mean the application callback committed. A return leg may still be in
+        ///      `errors` / retryable if the callback reverted. See {IncomingResponseReceived}.
         bool executed;
         /// @dev If this request is a one-way response or error delivery, links to the original two-way request ID.
         bytes32 sourceRequestId;
