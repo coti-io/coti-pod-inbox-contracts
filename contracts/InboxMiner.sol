@@ -10,6 +10,14 @@ import "./MinerBase.sol";
 /// @title InboxMiner
 /// @notice Miner-driven inbox: ingest mined payloads, execute targets, and collect fees.
 abstract contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGuard {
+    /// @notice Max bytes of target returndata retained on failure (prefix only).
+    /// @dev Full payload is hashed; storing unbounded returndata can OOG the miner tx and wedge the
+    ///      contiguous incoming-nonce queue (POD-02).
+    uint256 public constant MAX_ERROR_RETURN_DATA = 256;
+
+    /// @notice Gas reserved after the target subcall so failure accounting can always commit.
+    uint256 private constant POST_CALL_GAS_RESERVE = 100_000;
+
     /// @notice When true, {batchProcessRequests} and {retryFailedRequest} revert (circuit breaker).
     bool public messageProcessingPaused;
 
@@ -205,11 +213,19 @@ abstract contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGua
         }
 
         uint256 targetGasBudget = _localRequestExecutionBudget(incomingRequest.targetFee);
-        uint256 gasBeforeSubcall = gasleft();
+        // Leave headroom so capping returndata and writing storage cannot OOG the outer tx.
+        uint256 gasForCall = gasleft();
+        if (gasForCall > POST_CALL_GAS_RESERVE) {
+            unchecked {
+                gasForCall -= POST_CALL_GAS_RESERVE;
+            }
+        }
+        if (targetGasBudget < gasForCall) {
+            gasForCall = targetGasBudget;
+        }
 
-        bool success;
-        bytes memory returnData;
-        (success, returnData) = targetContract.call{gas: targetGasBudget}(callData);
+        uint256 gasBeforeSubcall = gasleft();
+        (bool success, bytes memory returnData) = _callWithCappedReturnData(targetContract, gasForCall, callData);
 
         uint256 gasUsed = gasBeforeSubcall - gasleft();
         uint256 gasRemainingApprox = targetGasBudget > gasUsed ? targetGasBudget - gasUsed : 0;
@@ -228,5 +244,32 @@ abstract contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGua
             });
             emit ErrorReceived(rid, ERROR_CODE_EXECUTION_FAILED, returnData);
         }
+    }
+
+    /// @dev Low-level call that never retains more than {MAX_ERROR_RETURN_DATA} bytes of returndata.
+    ///      On failure, `returnData` is `abi.encode(bytes32 prefixHash, uint256 fullLength, bytes prefix)`
+    ///      where `prefixHash = keccak256(prefix)` and `fullLength` is `returndatasize()` (may exceed the prefix).
+    function _callWithCappedReturnData(address target, uint256 gasBudget, bytes memory callData)
+        private
+        returns (bool success, bytes memory returnData)
+    {
+        uint256 fullLength;
+        assembly {
+            let dataPtr := add(callData, 32)
+            let dataLen := mload(callData)
+            success := call(gasBudget, target, 0, dataPtr, dataLen, 0, 0)
+            fullLength := returndatasize()
+        }
+
+        if (success) {
+            return (true, new bytes(0));
+        }
+
+        uint256 copyLen = fullLength > MAX_ERROR_RETURN_DATA ? MAX_ERROR_RETURN_DATA : fullLength;
+        bytes memory prefix = new bytes(copyLen);
+        assembly {
+            returndatacopy(add(prefix, 32), 0, copyLen)
+        }
+        returnData = abi.encode(keccak256(prefix), fullLength, prefix);
     }
 }
