@@ -75,13 +75,20 @@ describe("PoDPriceOracle", { concurrency: 1 }, async () => {
     assert.equal(await oracle.read.getLocalTokenPriceUSD(), first);
   });
 
-  it("ILivePriceMetaReader on adapter", async () => {
-    const band = await viem.deployContract("MockBandStdReference", [], { client: c });
-    const ad = await viem.deployContract("BandLiveOracle", [owner, band.address, 3600n], { client: c });
-    await band.write.setRate(["ETH", "USDC", BAND_ETH], { account: owner });
-    await ad.write.setFeed([localToken, packBand("ETH"), packBand("USDC")], { account: owner });
-    const [price, updated] = await ad.read.readPriceWithMeta([localToken]);
-    assert.equal(price, BAND_ETH);
-    assert.ok(updated > 0n);
+  it("refreshCache updates both legs and has no single-token overload", async () => {
+    const feed = await viem.deployContract("MockChainlinkAggregator", [8, ETH_8], { client: c });
+    const { oracle } = await deploy("chainlink", feed.address);
+    await oracle.write.setRemoteTokenPriceUSD([usdPerWholeToken18(TESTNET_COTI_USD)], { account: owner });
+    await oracle.write.refreshCache([]);
+    assert.equal(await oracle.read.getLocalTokenPriceUSD(), usdPerWholeToken18(TESTNET_ETH_USD));
+    assert.equal(await oracle.read.getRemoteTokenPriceUSD(), usdPerWholeToken18(TESTNET_COTI_USD));
+    const hasSingleLeg = oracle.abi.some(
+      (x: { type?: string; name?: string; inputs?: { type: string }[] }) =>
+        x.type === "function" &&
+        x.name === "refreshCache" &&
+        Array.isArray(x.inputs) &&
+        x.inputs.length === 1
+    );
+    assert.equal(hasSingleLeg, false, "single-leg refreshCache(address) must be removed (POD-05)");
   });
 });

@@ -80,19 +80,6 @@ contract PriceOracle is Ownable {
         _refreshInboxCache();
     }
 
-    /// @notice Refresh one inbox leg when the interval gate allows.
-    function refreshCache(address token) external {
-        if (token != localToken && token != remoteToken) {
-            revert UnknownToken(token);
-        }
-        if (!_fetchIntervalsElapsed()) {
-            return;
-        }
-        lastFetchTimestamp = block.timestamp;
-        cachedPriceUSD[token] = _pullCachedPrice(token);
-        _afterRefreshCache();
-    }
-
     function _refreshInboxCache() internal {
         if (!_fetchIntervalsElapsed()) {
             return;
