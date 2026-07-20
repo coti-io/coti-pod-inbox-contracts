@@ -114,7 +114,8 @@ contract InboxBase is IInbox, InboxFeeManager {
         requestId = _sendTwoWayMessage(
             targetChainId, targetContract, methodCall, callbackSelector, errorSelector, targetFeeGas, callerFeeGas
         );
-        priceOracle.refreshCache();
+        // Best-effort: must not revert a paid send (EIP-150 63/64 can OOG nested refresh under tight gas).
+        try priceOracle.refreshCache() {} catch {}
     }
 
     /// @inheritdoc IInbox
@@ -132,7 +133,8 @@ contract InboxBase is IInbox, InboxFeeManager {
         requestId = _sendOneWayMessage(
             targetChainId, targetContract, methodCall, bytes4(0), bytes32(0), targetFeeGas, 0, msg.sender
         );
-        priceOracle.refreshCache();
+        // Best-effort: must not revert a paid send (EIP-150 63/64 can OOG nested refresh under tight gas).
+        try priceOracle.refreshCache() {} catch {}
     }
 
     /// @inheritdoc IInbox

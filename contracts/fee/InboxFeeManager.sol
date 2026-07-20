@@ -6,7 +6,14 @@ import "./PriceOracle.sol";
 
 /// @title InboxFeeManager
 /// @notice Validates cross-chain message fee budgets. Mixed into {InboxBase}.
-/// @dev `msg.value` is converted to **gas units** using `tx.gasprice` (or {DEFAULT_GAS_PRICE} if zero). {Request.targetFee} and {Request.callerFee} store gas budgets, not wei. Oracle price ratio maps remote gas budgets when configured; otherwise 1:1.
+/// @dev `msg.value` is converted to **gas units** using {_referenceGasPrice} (basefee + priority fee when
+///      available, otherwise a clamped `tx.gasprice`). {Request.targetFee} and {Request.callerFee} store gas
+///      budgets, not wei. Oracle price ratio maps remote gas budgets when configured; otherwise 1:1.
+///
+///      Over/under-charge envelope: budgets size against a *reference* gas price, not the destination chain's
+///      future gas market. Callers who tip far above `minPriorityFee` do not buy extra gas units (basefee path).
+///      On chains without basefee, `tx.gasprice` is clamped to `[minGasPriceWei, maxGasPriceWei]` so extreme
+///      tips cannot inflate remote `call{gas}` caps unboundedly.
 abstract contract InboxFeeManager {
     /// @notice Template for minimum fees in **gas units** (not wei).
     /// @dev If `constantFee` is non-zero it is the minimum gas units. Else: `(data * gasPerByte + callbackExecutionGas + errorLength * gasPerByte) * bufferRatioX10000 / 10000`.
@@ -27,8 +34,17 @@ abstract contract InboxFeeManager {
     /// @notice Minimum template for the remote execution leg.
     FeeConfig public remoteMinFeeConfig;
 
-    /// @notice Fallback gas price (wei) when `tx.gasprice == 0`.
+    /// @notice Fallback gas price (wei) when `tx.gasprice == 0` and no basefee path applies.
     uint256 public constant DEFAULT_GAS_PRICE = 2_000_000_000 wei;
+
+    /// @notice Added to `block.basefee` when sizing fee budgets on EIP-1559 chains.
+    uint256 public minPriorityFeeWei;
+
+    /// @notice Floor for the reference gas price (wei). Defaults to {DEFAULT_GAS_PRICE}.
+    uint256 public minGasPriceWei = DEFAULT_GAS_PRICE;
+
+    /// @notice Ceiling for the reference gas price (wei). Zero disables the ceiling.
+    uint256 public maxGasPriceWei;
 
     /// @dev Reserved execution gas units for error paths (documentation constant; enforcement is application-level).
     uint256 internal constant MIN_GAS_RESERVE_EXECUTION = 100_000;
@@ -47,6 +63,8 @@ abstract contract InboxFeeManager {
     error OracleNotConfigured();
     /// @notice Oracle returned a zero USD price.
     error OraclePriceZero();
+    /// @notice Gas-price bound configuration is inconsistent.
+    error GasPriceBoundsInvalid(uint256 minGasPrice, uint256 maxGasPrice);
 
     /// @notice Send the contract's entire native balance to `to` (typically called by an owner-gated wrapper).
     /// @param to Recipient of accumulated message fees; must not be zero.
@@ -78,6 +96,39 @@ abstract contract InboxFeeManager {
         priceOracle = PriceOracle(priceOracleAddress);
         if (priceOracleAddress != address(0)) {
             _validatedOraclePrices();
+        }
+    }
+
+    /// @notice Configure reference-gas-price parameters used by fee→gas conversion.
+    /// @param minPriorityFeeWei_ Priority tip added to `block.basefee` (EIP-1559 path).
+    /// @param minGasPriceWei_ Floor for the reference gas price.
+    /// @param maxGasPriceWei_ Ceiling; zero means no ceiling.
+    function _setGasPriceBounds(uint256 minPriorityFeeWei_, uint256 minGasPriceWei_, uint256 maxGasPriceWei_)
+        internal
+    {
+        if (minGasPriceWei_ == 0) {
+            revert GasPriceBoundsInvalid(minGasPriceWei_, maxGasPriceWei_);
+        }
+        if (maxGasPriceWei_ != 0 && maxGasPriceWei_ < minGasPriceWei_) {
+            revert GasPriceBoundsInvalid(minGasPriceWei_, maxGasPriceWei_);
+        }
+        minPriorityFeeWei = minPriorityFeeWei_;
+        minGasPriceWei = minGasPriceWei_;
+        maxGasPriceWei = maxGasPriceWei_;
+    }
+
+    /// @dev Reference wei/gas for converting prepaid fees into gas-unit budgets.
+    function _referenceGasPrice() internal view returns (uint256 gasPrice) {
+        if (block.basefee > 0) {
+            gasPrice = block.basefee + minPriorityFeeWei;
+        } else {
+            gasPrice = tx.gasprice != 0 ? tx.gasprice : DEFAULT_GAS_PRICE;
+        }
+        if (gasPrice < minGasPriceWei) {
+            gasPrice = minGasPriceWei;
+        }
+        if (maxGasPriceWei != 0 && gasPrice > maxGasPriceWei) {
+            gasPrice = maxGasPriceWei;
         }
     }
 
@@ -143,7 +194,7 @@ abstract contract InboxFeeManager {
         (uint256 localPrice, uint256 remotePrice) = _validatedOraclePrices();
         FeeConfig memory localMin = localMinFeeConfig;
         FeeConfig memory remoteMin = remoteMinFeeConfig;
-        uint256 gasPrice = tx.gasprice != 0 ? tx.gasprice : DEFAULT_GAS_PRICE;
+        uint256 gasPrice = _referenceGasPrice();
         callerGasLocalUnits = callbackFeeLocalWei / gasPrice;
         uint256 remoteGasWei = totalFeeLocalWei - callbackFeeLocalWei;
         targetGasRemoteUnits = Math.mulDiv(remoteGasWei / gasPrice, localPrice, remotePrice);
@@ -171,7 +222,7 @@ abstract contract InboxFeeManager {
         }
         (uint256 localPrice, uint256 remotePrice) = _validatedOraclePrices();
         FeeConfig memory remoteMin = remoteMinFeeConfig;
-        uint256 gasPrice = tx.gasprice != 0 ? tx.gasprice : DEFAULT_GAS_PRICE;
+        uint256 gasPrice = _referenceGasPrice();
         targetGasRemoteUnits = Math.mulDiv(totalFeeLocalWei / gasPrice, localPrice, remotePrice);
         if (targetGasRemoteUnits < expectedMinFee(dataSize, remoteMin)) {
             revert TargetFeeTooLow(targetGasRemoteUnits);

@@ -130,6 +130,17 @@ abstract contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGua
         _setPriceOracle(oracle);
     }
 
+    /// @notice Configure reference gas-price bounds for fee→gas conversion.
+    /// @param minPriorityFeeWei_ Tip added to `block.basefee` on EIP-1559 chains.
+    /// @param minGasPriceWei_ Floor for the reference gas price (must be non-zero).
+    /// @param maxGasPriceWei_ Ceiling; zero disables the ceiling.
+    function setGasPriceBounds(uint256 minPriorityFeeWei_, uint256 minGasPriceWei_, uint256 maxGasPriceWei_)
+        external
+        onlyOwner
+    {
+        _setGasPriceBounds(minPriorityFeeWei_, minGasPriceWei_, maxGasPriceWei_);
+    }
+
     /// @notice Update minimum fee templates for local and remote legs.
     /// @param _local Local leg template.
     /// @param _remote Remote leg template.
