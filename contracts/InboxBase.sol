@@ -76,7 +76,9 @@ contract InboxBase is IInbox, InboxFeeManager {
     /// @notice Target raised an application error for an incoming request.
     event RaiseReceived(bytes32 indexed incomingRequestId, bytes errorPayload);
 
-    /// @notice One-way incoming response/error was linked to its original outbound request.
+    /// @notice Linked one-way return/error leg was received for an original outbound request.
+    /// @dev Marks the original request `executed`. This means the return leg was ingested—not that the
+    ///      application callback succeeded. Check return-leg `errors` / retries before treating it as final.
     event IncomingResponseReceived(bytes32 indexed requestId, bytes32 indexed sourceRequestId);
 
     /// @notice Request execution or encoding failed.

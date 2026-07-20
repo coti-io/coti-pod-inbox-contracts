@@ -104,6 +104,8 @@ abstract contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGua
 
             _executeIncomingRequest(incomingRequest, sourceChainId);
 
+            // POD-09: mark original outbound as executed when the return leg is received, even if the
+            // callback reverted (retryable via errors[]). Consumers must not treat this as "callback committed."
             if (incomingRequest.requestId != bytes32(0) && incomingRequest.sourceRequestId != bytes32(0)
                 && !incomingRequest.isTwoWay) {
                 bytes32 originalRequestId = incomingRequest.sourceRequestId;
