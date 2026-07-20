@@ -36,6 +36,12 @@ contract InboxBase is IInbox, InboxFeeManager {
     uint64 internal constant ERROR_CODE_EXECUTION_FAILED = 1;
     uint64 internal constant ERROR_CODE_ENCODE_FAILED = 2;
 
+    /// @notice Placeholder `originalSender` for Inbox-generated system-error return legs (not a real contract).
+    /// @dev Error callbacks must not require `inboxMsgSender()` to equal the COTI peer; use {onlyInbox} +
+    ///      {inboxErrorType()} / non-zero {inboxSourceRequestId} (set only by {raise} / system-error delivery).
+    ///      System payload: {ErrorData} (`errorCode`, `message`). Attribution via {SYSTEM_SENDER}. Not retryable.
+    address public constant SYSTEM_SENDER = address(uint160(uint256(keccak256("POD_INBOX_SYSTEM_SENDER"))));
+
     /// @notice Outbound cross-chain request was created.
     /// @dev Payload bytes are stored in {requests}; logs carry only compact metadata for gas efficiency.
     event MessageSent(
@@ -75,6 +81,10 @@ contract InboxBase is IInbox, InboxFeeManager {
 
     /// @notice Request execution or encoding failed.
     event ErrorReceived(bytes32 indexed requestId, uint64 errorCode, bytes errorMessage);
+
+    /// @notice Encode/system failure automatically raised an error callback to the source chain.
+    /// @dev Payload is {ErrorData}; not eligible for {retryFailedRequest}.
+    event SystemErrorRaised(bytes32 indexed requestId, uint64 errorCode, bytes payload);
 
     /// @notice Emitted after executing an incoming request. Values are gas units (same basis as `Request.targetFee`).
     /// @param gasUsed Gas used by the subcall (approximate).
@@ -116,8 +126,10 @@ contract InboxBase is IInbox, InboxFeeManager {
     ) external payable returns (bytes32 requestId) {
         uint256 dataSize = abi.encode(methodCall).length;
         uint256 targetFeeGas = validateAndPrepareOneWayFees(dataSize, msg.value);
-        requestId = _sendOneWayMessage(targetChainId, targetContract, methodCall, errorSelector, bytes32(0), targetFeeGas, 0);
-        priceOracle.fetchPrices();
+        requestId = _sendOneWayMessage(
+            targetChainId, targetContract, methodCall, errorSelector, bytes32(0), targetFeeGas, 0, msg.sender
+        );
+        priceOracle.refreshCache();
     }
 
     /// @inheritdoc IInbox
@@ -150,7 +162,8 @@ contract InboxBase is IInbox, InboxFeeManager {
             incomingRequest.errorSelector,
             incomingRequestId,
             incomingRequest.callerFee,
-            0
+            0,
+            msg.sender
         );
 
         inboxResponses[incomingRequestId] = Response({responseRequestId: responseRequestId, response: data});
@@ -189,7 +202,8 @@ contract InboxBase is IInbox, InboxFeeManager {
             incomingRequest.errorSelector,
             incomingRequestId,
             incomingRequest.callerFee,
-            0
+            0,
+            msg.sender
         );
 
         inboxResponses[incomingRequestId] = Response({responseRequestId: outboundRequestId, response: data});
@@ -279,6 +293,38 @@ contract InboxBase is IInbox, InboxFeeManager {
     }
 
     /// @inheritdoc IInbox
+    function inboxErrorType() external view returns (InboxErrorType) {
+        bytes32 requestId = _currentContext.requestId;
+        if (requestId == bytes32(0) || _currentContext.remoteChainId == 0) {
+            return InboxErrorType.NotErrorContext;
+        }
+
+        Request storage incoming = incomingRequests[requestId];
+        if (incoming.requestId == bytes32(0)) {
+            return InboxErrorType.NotErrorContext;
+        }
+
+        // System-error return legs are attributed to {SYSTEM_SENDER}, not the COTI target.
+        if (incoming.originalSender == SYSTEM_SENDER) {
+            return InboxErrorType.SystemError;
+        }
+
+        bytes32 sourceRequestId = incoming.sourceRequestId;
+        if (sourceRequestId == bytes32(0)) {
+            return InboxErrorType.NotErrorContext;
+        }
+
+        Request storage original = requests[sourceRequestId];
+        if (original.requestId == bytes32(0) || original.errorSelector == bytes4(0)) {
+            return InboxErrorType.NotErrorContext;
+        }
+
+        // Linked return leg for a request that registered an error handler (app `raise`).
+        // Only Inbox creates linked legs (`raise` / `respond` / system-error); public sends use `sourceRequestId = 0`.
+        return InboxErrorType.Exception;
+    }
+
+    /// @inheritdoc IInbox
     function getRequestId(uint256 sourceChainId, uint256 targetChainId, uint256 nonce)
         external
         pure
@@ -321,11 +367,14 @@ contract InboxBase is IInbox, InboxFeeManager {
             true,
             bytes32(0),
             targetFeeGas,
-            callerFeeGas
+            callerFeeGas,
+            msg.sender
         );
     }
 
     /// @dev Creates a one-way outbound request (including responses/errors).
+    /// @param requestSender Attributed sender stored as `originalSender` / `callerContract`
+    ///        (normally `msg.sender`; {SYSTEM_SENDER} for Inbox system-error return legs).
     function _sendOneWayMessage(
         uint256 targetChainId,
         address targetContract,
@@ -333,7 +382,8 @@ contract InboxBase is IInbox, InboxFeeManager {
         bytes4 errorSelector,
         bytes32 sourceRequestId,
         uint256 targetFeeGas,
-        uint256 callerFeeGas
+        uint256 callerFeeGas,
+        address requestSender
     ) internal returns (bytes32) {
         return _createRequest(
             targetChainId,
@@ -344,7 +394,8 @@ contract InboxBase is IInbox, InboxFeeManager {
             false,
             sourceRequestId,
             targetFeeGas,
-            callerFeeGas
+            callerFeeGas,
+            requestSender
         );
     }
 
@@ -358,10 +409,12 @@ contract InboxBase is IInbox, InboxFeeManager {
         bool isTwoWay,
         bytes32 sourceRequestId,
         uint256 targetFeeGas,
-        uint256 callerFeeGas
+        uint256 callerFeeGas,
+        address requestSender
     ) internal returns (bytes32) {
         require(targetChainId != chainId, "Inbox: cannot send to same chain");
         require(targetContract != address(0), "Inbox: invalid target contract");
+        require(requestSender != address(0), "Inbox: invalid request sender");
 
         uint256 nonce = ++_requestNonce[targetChainId];
 
@@ -372,8 +425,8 @@ contract InboxBase is IInbox, InboxFeeManager {
             targetChainId: targetChainId,
             targetContract: targetContract,
             methodCall: methodCall,
-            callerContract: msg.sender,
-            originalSender: msg.sender,
+            callerContract: requestSender,
+            originalSender: requestSender,
             timestamp: uint64(block.timestamp),
             callbackSelector: callbackSelector,
             errorSelector: errorSelector,
@@ -406,6 +459,50 @@ contract InboxBase is IInbox, InboxFeeManager {
             errorSelector
         );
         return requestId;
+    }
+
+    /// @dev Auto-deliver a system-error payload on the same `errorSelector(bytes)` path as {raise}.
+    ///      Source handlers branch with {inboxErrorType()} ({SystemError} vs {Exception}).
+    function _sendSystemErrorCallback(Request storage incomingRequest, bytes memory encodeErr) internal {
+        if (incomingRequest.errorSelector == bytes4(0)) {
+            return;
+        }
+        if (inboxResponses[incomingRequest.requestId].responseRequestId != bytes32(0)) {
+            return;
+        }
+
+        address sourceApp = incomingRequest.originalSender;
+        if (sourceApp == address(0)) {
+            return;
+        }
+
+        bytes memory errorMessage = encodeErr.length == 0
+            ? abi.encodePacked("Inbox: encodeMethodCall failed")
+            : encodeErr;
+        bytes memory payload = abi.encode(ERROR_CODE_ENCODE_FAILED, errorMessage);
+
+        MpcMethodCall memory errorMethodCall = MpcMethodCall({
+            selector: bytes4(0),
+            data: abi.encodeWithSelector(incomingRequest.errorSelector, payload),
+            datatypes: new bytes8[](0),
+            datalens: new bytes32[](0)
+        });
+
+        // Attribute to {SYSTEM_SENDER}, not the intended COTI target (do not impersonate the peer).
+        bytes32 outboundRequestId = _sendOneWayMessage(
+            incomingRequest.targetChainId,
+            sourceApp,
+            errorMethodCall,
+            incomingRequest.errorSelector,
+            incomingRequest.requestId,
+            incomingRequest.callerFee,
+            0,
+            SYSTEM_SENDER
+        );
+
+        inboxResponses[incomingRequest.requestId] =
+            Response({responseRequestId: outboundRequestId, response: payload});
+        emit SystemErrorRaised(incomingRequest.requestId, ERROR_CODE_ENCODE_FAILED, payload);
     }
 
     /// @dev Compact log metadata for {MessageSent} and {MessageReceived}.

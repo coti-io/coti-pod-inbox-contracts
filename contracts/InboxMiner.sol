@@ -196,6 +196,7 @@ abstract contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGua
 
         if (!encodedOk) {
             _recordEncodeError(incomingRequest.requestId, encodeErr);
+            _sendSystemErrorCallback(incomingRequest, encodeErr);
 
             _currentContext = ExecutionContext({remoteChainId: 0, remoteContract: address(0), requestId: bytes32(0)});
 
