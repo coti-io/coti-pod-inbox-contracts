@@ -121,11 +121,13 @@ interface IInbox {
         uint256 callbackFeeLocalWei
     ) external payable returns (bytes32);
 
-    /// @notice Send a one-way message with an error handler only (no callback).
+    /// @notice Send a one-way message with no callback and no error handler.
+    /// @dev `errorSelector` must be zero. One-way messages do not generate raise/system-error return legs
+    ///      (no funded `callerFee`). Use {sendTwoWayMessage} when the source needs an error callback.
     /// @param targetChainId Destination chain ID.
     /// @param targetContract Contract to call on the destination chain.
     /// @param methodCall Calldata and MPC metadata.
-    /// @param errorSelector Selector invoked on error.
+    /// @param errorSelector Must be `bytes4(0)`.
     /// @return requestId The new outbound request ID.
     function sendOneWayMessage(
         uint256 targetChainId,
@@ -133,6 +135,9 @@ interface IInbox {
         MpcMethodCall calldata methodCall,
         bytes4 errorSelector
     ) external payable returns (bytes32);
+
+    /// @notice One-way sends cannot register an error callback (no funded return-leg budget).
+    error OneWayErrorSelectorNotSupported(bytes4 errorSelector);
 
     // --- External: execution (non-payable) ---
 
