@@ -205,6 +205,8 @@ describe(
       const [localUsd, remoteUsd] = await oracle.read.getPricesUSD();
       logStep(`getPricesUSD(): local=${formatUsdDisplay(localUsd)} remote=${formatUsdDisplay(remoteUsd)} USD`);
       await inbox.write.setPriceOracle([oracle.address], w);
+      // Pin fee→gas conversion to the same gas price the suite uses for assertions (POD-07).
+      await inbox.write.setGasPriceBounds([0n, TX_GAS_PRICE_WEI, TX_GAS_PRICE_WEI], w);
       return { inbox, oracle, deployer, publicClient };
     };
 
