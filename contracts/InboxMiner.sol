@@ -169,14 +169,13 @@ abstract contract InboxMiner is InboxBase, MinerBase, IInboxMiner, ReentrancyGua
             incomingRequest.methodCall
         );
         if (!encodedOk) {
-            _recordEncodeError(requestId, encodeErr);
+            // Preserve ERROR_CODE_EXECUTION_FAILED so retry stays eligible (POD-04).
+            // Do not overwrite with encode-failed or emit a system callback on this path.
             _currentContext = ExecutionContext({remoteChainId: 0, remoteContract: address(0), requestId: bytes32(0)});
-            return;
+            revert RetryFailedRequestEncodeFailed(encodeErr);
         }
 
-        bool success;
-        bytes memory returnData;
-        (success, returnData) = targetContract.call(callData);
+        (bool success, bytes memory returnData) = _callWithCappedReturnData(targetContract, gasleft(), callData);
         _currentContext = ExecutionContext({remoteChainId: 0, remoteContract: address(0), requestId: bytes32(0)});
 
         if (!success) {
