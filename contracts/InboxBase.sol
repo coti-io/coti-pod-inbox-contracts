@@ -219,10 +219,12 @@ contract InboxBase is IInbox, InboxFeeManager {
     }
 
     /// @inheritdoc IInbox
-    function getOutboxError(bytes32 requestId) external view returns (uint256 code, string memory message) {
+    /// @dev Returns the stored `errorMessage` bytes as-is. For execution failures (code 1) that is the
+    ///      first ≤{InboxMiner.MAX_ERROR_RETURN_DATA} bytes of returndata (POD-02). Decode in the client.
+    function getOutboxError(bytes32 requestId) external view returns (uint256 code, bytes memory data) {
         Error memory err = errors[requestId];
         require(err.requestId != bytes32(0), "Inbox: error not found");
-        return (err.errorCode, string(err.errorMessage));
+        return (err.errorCode, err.errorMessage);
     }
 
     /// @inheritdoc IInbox

@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { before, describe, it } from "node:test";
 import {
-  decodeAbiParameters,
-  decodeEventLog,
+  decodeErrorResult,
   encodeFunctionData,
-  keccak256,
   toHex,
+  type Hex,
 } from "viem";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
@@ -14,8 +13,6 @@ const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
 const SOURCE_CHAIN_ID = 1000n;
 const TARGET_CHAIN_ID = 1001n;
-const GAS_PRICE_WEI = 1_000_000_000n;
-const SEND_VALUE_WEI = 2_000_000_000_000_000n;
 const PRICE_SCALE_18 = 10n ** 18n;
 const MAX_ERROR_RETURN_DATA = 256n;
 /** Large enough to exceed {MAX_ERROR_RETURN_DATA} while fitting under EDR's 2^24 gas cap. */
@@ -34,67 +31,270 @@ const packRequestId = (source: bigint, target: bigint, nonce: bigint): `0x${stri
   return toHex(packed, { size: 32 });
 };
 
-describe("Inbox POD-02 capped returndata", { concurrency: false, timeout: 600_000 }, () => {
-  it("large target revert stores capped error and allows contiguous next nonce", async () => {
-    const { viem } = await network.connect({
-      network: "hardhat",
-      override: { allowUnlimitedContractSize: true },
-    });
-    const publicClient = await viem.getPublicClient();
-    const [wallet] = await viem.getWalletClients();
-    const deployer = wallet.account.address as `0x${string}`;
+const rawMethod = (data: `0x${string}`) => ({
+  selector: "0x00000000" as `0x${string}`,
+  data,
+  datatypes: [] as `0x${string}`[],
+  datalens: [] as `0x${string}`[],
+});
 
-    const inbox = await viem.deployContract("Inbox", [], {
-      client: { public: publicClient, wallet },
-    });
-    await inbox.write.init([deployer, TARGET_CHAIN_ID], { account: deployer });
-    await inbox.write.updateMinFeeConfigs([{ ...CONSTANT_FEE }, { ...CONSTANT_FEE }], {
-      account: deployer,
-    });
-    await inbox.write.addMiner([deployer], { account: deployer });
+type Harness = {
+  publicClient: any;
+  deployer: `0x${string}`;
+  inbox: any;
+  target: any;
+  nextNonce: number;
+};
 
-    const oracle = await viem.deployContract("PriceOracle", [deployer], {
-      client: { public: publicClient, wallet },
-    });
-    const { localToken, remoteToken } = oracleTokensForChain(31337);
-    await oracle.write.setInboxTokens([localToken, remoteToken], { account: deployer });
-    await oracle.write.setLocalTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
-    await oracle.write.setRemoteTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
-    await inbox.write.setPriceOracle([oracle.address], { account: deployer });
+const deployHarness = async (): Promise<Harness> => {
+  const { viem } = await network.connect({ network: "hardhat" });
+  const publicClient = await viem.getPublicClient();
+  const [wallet] = await viem.getWalletClients();
+  const deployer = wallet.account.address as `0x${string}`;
 
-    const boomTarget = await viem.deployContract("LargeRevertTarget", [], {
-      client: { public: publicClient, wallet },
-    });
+  const inbox = await viem.deployContract("Inbox", [], {
+    client: { public: publicClient, wallet },
+  });
+  await inbox.write.init([deployer, TARGET_CHAIN_ID], { account: deployer });
+  await inbox.write.updateMinFeeConfigs([{ ...CONSTANT_FEE }, { ...CONSTANT_FEE }], {
+    account: deployer,
+  });
+  await inbox.write.addMiner([deployer], { account: deployer });
 
+  const oracle = await viem.deployContract("PriceOracle", [deployer], {
+    client: { public: publicClient, wallet },
+  });
+  const { localToken, remoteToken } = oracleTokensForChain(31337);
+  await oracle.write.setInboxTokens([localToken, remoteToken], { account: deployer });
+  await oracle.write.setLocalTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
+  await oracle.write.setRemoteTokenPriceUSD([PRICE_SCALE_18], { account: deployer });
+  await inbox.write.setPriceOracle([oracle.address], { account: deployer });
+
+  const target = await viem.deployContract("LargeRevertTarget", [], {
+    client: { public: publicClient, wallet },
+  });
+
+  return { publicClient, deployer, inbox, target, nextNonce: 1 };
+};
+
+/** Mine one failing request; returns requestId. */
+const mineFailing = async (h: Harness, calldata: Hex, targetFee = 5_000_000n): Promise<`0x${string}`> => {
+  const requestId = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, BigInt(h.nextNonce));
+  h.nextNonce += 1;
+  const hash = await h.inbox.write.batchProcessRequests(
+    [
+      SOURCE_CHAIN_ID,
+      [
+        {
+          requestId,
+          sourceContract: h.deployer,
+          targetContract: h.target.address,
+          methodCall: rawMethod(calldata),
+          callbackSelector: "0x00000000",
+          errorSelector: "0x00000000",
+          isTwoWay: false,
+          sourceRequestId: toHex(0n, { size: 32 }),
+          targetFee: targetFee,
+          callerFee: 0n,
+        },
+      ],
+    ],
+    { account: h.deployer, gas: 15_000_000n }
+  );
+  const receipt = await h.publicClient.waitForTransactionReceipt({
+    hash,
+    ...receiptWaitOptions,
+  });
+  assert.equal(receipt.status, "success", "mine tx should succeed even when target reverts");
+  return requestId;
+};
+
+/** Stored errorMessage must equal getOutboxError data (raw capped returndata). */
+const readErrorBytes = async (h: Harness, requestId: `0x${string}`) => {
+  const errTuple = (await h.inbox.read.errors([requestId])) as readonly [
+    `0x${string}`,
+    bigint,
+    `0x${string}`,
+  ];
+  const [, errorCode, errorMessage] = errTuple;
+  assert.equal(errorCode, 1n, "expected ERROR_CODE_EXECUTION_FAILED");
+
+  const [code, data] = (await h.inbox.read.getOutboxError([requestId])) as readonly [
+    bigint,
+    `0x${string}`,
+  ];
+  assert.equal(code, 1n);
+  assert.equal(data.toLowerCase(), errorMessage.toLowerCase());
+  return data;
+};
+
+const byteLen = (hex: `0x${string}`) => (hex.length - 2) / 2;
+
+/** Best-effort Error(string) decode for client-side readability checks. */
+const tryDecodeErrorString = (data: `0x${string}`): string | undefined => {
+  try {
+    const decoded = decodeErrorResult({
+      abi: [{ type: "error", name: "Error", inputs: [{ name: "message", type: "string" }] }],
+      data,
+    });
+    return decoded.args[0] as string;
+  } catch {
+    return undefined;
+  }
+};
+
+describe("Inbox POD-02 capped returndata (raw bytes)", {
+  concurrency: false,
+  timeout: 600_000,
+}, () => {
+  let h: Harness;
+
+  before(async () => {
+    h = await deployHarness();
+  });
+
+  it("short Error(string) is stored intact; JS can decode the reason", async () => {
+    const reason = "insufficient balance";
+    const calldata = encodeFunctionData({
+      abi: h.target.abi,
+      functionName: "boomErrorString",
+      args: [reason],
+    });
+    const rid = await mineFailing(h, calldata);
+    const data = await readErrorBytes(h, rid);
+    assert.ok(byteLen(data) <= Number(MAX_ERROR_RETURN_DATA));
+    assert.equal(tryDecodeErrorString(data), reason);
+  });
+
+  it("Error(string) under the cap is fully decodable in JS", async () => {
+    const bodyLen = 160;
+    const calldata = encodeFunctionData({
+      abi: h.target.abi,
+      functionName: "boomErrorStringRepeated",
+      args: ["0x41", BigInt(bodyLen)],
+    });
+    const rid = await mineFailing(h, calldata);
+    const data = await readErrorBytes(h, rid);
+    assert.ok(byteLen(data) <= Number(MAX_ERROR_RETURN_DATA));
+    assert.equal(tryDecodeErrorString(data), "A".repeat(bodyLen));
+  });
+
+  it("oversized Error(string) is capped at 256 bytes; prefix is uncorrupted", async () => {
+    const bodyLen = 500;
+    const calldata = encodeFunctionData({
+      abi: h.target.abi,
+      functionName: "boomErrorStringRepeated",
+      args: ["0x42", BigInt(bodyLen)],
+    });
+    const rid = await mineFailing(h, calldata);
+    const data = await readErrorBytes(h, rid);
+    assert.equal(byteLen(data), Number(MAX_ERROR_RETURN_DATA));
+    // Truncated mid-ABI — full decode fails; selector + header still intact.
+    assert.equal(data.slice(0, 10).toLowerCase(), "0x08c379a0");
+    assert.equal(undefined, tryDecodeErrorString(data));
+    // Body bytes after Error(string) header (68) start as ASCII 'B' (may end with ABI pad zeros).
+    const bodyHex = data.slice(2 + 68 * 2).toLowerCase();
+    assert.ok(bodyHex.startsWith("42".repeat(32)), `body prefix corrupted: ${bodyHex.slice(0, 64)}`);
+    assert.ok(/^(?:42)+0*$/.test(bodyHex), `unexpected body bytes: ${bodyHex.slice(-16)}`);
+  });
+
+  it("empty revert stores empty bytes", async () => {
+    const calldata = encodeFunctionData({
+      abi: h.target.abi,
+      functionName: "boomEmpty",
+      args: [],
+    });
+    const rid = await mineFailing(h, calldata);
+    const data = await readErrorBytes(h, rid);
+    assert.equal(data, "0x");
+  });
+
+  it("Panic returndata is preserved uncorrupted", async () => {
+    const calldata = encodeFunctionData({
+      abi: h.target.abi,
+      functionName: "boomPanic",
+      args: [],
+    });
+    const rid = await mineFailing(h, calldata, 2_000_000n);
+    const data = await readErrorBytes(h, rid);
+    assert.ok(byteLen(data) > 0);
+    assert.ok(data.toLowerCase().startsWith("0x4e487b71"), `data=${data}`);
+  });
+
+  it("custom error bytes are preserved; hint identifiable in hex", async () => {
+    const hint = "FactoryNotAllowed";
+    const calldata = encodeFunctionData({
+      abi: h.target.abi,
+      functionName: "boomCustom",
+      args: [42n, hint],
+    });
+    const rid = await mineFailing(h, calldata);
+    const data = await readErrorBytes(h, rid);
+    assert.ok(byteLen(data) <= Number(MAX_ERROR_RETURN_DATA));
+    assert.ok(data.toLowerCase().includes(Buffer.from(hint, "utf8").toString("hex")));
+  });
+
+  it("exact 256-byte raw revert is stored in full", async () => {
+    const calldata = encodeFunctionData({
+      abi: h.target.abi,
+      functionName: "boom",
+      args: [MAX_ERROR_RETURN_DATA],
+    });
+    const rid = await mineFailing(h, calldata);
+    const data = await readErrorBytes(h, rid);
+    assert.equal(byteLen(data), Number(MAX_ERROR_RETURN_DATA));
+    assert.equal(data.toLowerCase(), `0x${"00".repeat(Number(MAX_ERROR_RETURN_DATA))}`);
+  });
+
+  it("huge raw revert is capped at 256 zero bytes", async () => {
+    const calldata = encodeFunctionData({
+      abi: h.target.abi,
+      functionName: "boom",
+      args: [LARGE_REVERT_SIZE],
+    });
+    const rid = await mineFailing(h, calldata);
+    const data = await readErrorBytes(h, rid);
+    assert.equal(byteLen(data), Number(MAX_ERROR_RETURN_DATA));
+    assert.equal(data.toLowerCase(), `0x${"00".repeat(Number(MAX_ERROR_RETURN_DATA))}`);
+  });
+
+  it("tiny raw revert (1–16 bytes) is stored without padding", async () => {
+    for (const size of [1n, 4n, 16n]) {
+      const calldata = encodeFunctionData({
+        abi: h.target.abi,
+        functionName: "boom",
+        args: [size],
+      });
+      const rid = await mineFailing(h, calldata);
+      const data = await readErrorBytes(h, rid);
+      assert.equal(byteLen(data), Number(size));
+      assert.equal(data.toLowerCase(), `0x${"00".repeat(Number(size))}`);
+    }
+  });
+
+  it("contiguous next nonce still works after a failed large revert", async () => {
     const boomCalldata = encodeFunctionData({
-      abi: boomTarget.abi,
+      abi: h.target.abi,
       functionName: "boom",
       args: [LARGE_REVERT_SIZE],
     });
     const okCalldata = encodeFunctionData({
-      abi: boomTarget.abi,
+      abi: h.target.abi,
       functionName: "ok",
       args: [],
     });
+    const ridFail = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, BigInt(h.nextNonce));
+    const ridOk = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, BigInt(h.nextNonce + 1));
+    h.nextNonce += 2;
 
-    const rawMethod = (data: `0x${string}`) => ({
-      selector: "0x00000000" as `0x${string}`,
-      data,
-      datatypes: [] as `0x${string}`[],
-      datalens: [] as `0x${string}`[],
-    });
-
-    const rid1 = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 1n);
-    const rid2 = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 2n);
-
-    const mineHash = await inbox.write.batchProcessRequests(
+    const hash = await h.inbox.write.batchProcessRequests(
       [
         SOURCE_CHAIN_ID,
         [
           {
-            requestId: rid1,
-            sourceContract: deployer,
-            targetContract: boomTarget.address,
+            requestId: ridFail,
+            sourceContract: h.deployer,
+            targetContract: h.target.address,
             methodCall: rawMethod(boomCalldata),
             callbackSelector: "0x00000000",
             errorSelector: "0x00000000",
@@ -104,9 +304,9 @@ describe("Inbox POD-02 capped returndata", { concurrency: false, timeout: 600_00
             callerFee: 0n,
           },
           {
-            requestId: rid2,
-            sourceContract: deployer,
-            targetContract: boomTarget.address,
+            requestId: ridOk,
+            sourceContract: h.deployer,
+            targetContract: h.target.address,
             methodCall: rawMethod(okCalldata),
             callbackSelector: "0x00000000",
             errorSelector: "0x00000000",
@@ -117,66 +317,20 @@ describe("Inbox POD-02 capped returndata", { concurrency: false, timeout: 600_00
           },
         ],
       ],
-      { account: deployer, gas: 15_000_000n }
+      { account: h.deployer, gas: 15_000_000n }
     );
-    const receipt = await publicClient.waitForTransactionReceipt({
-      hash: mineHash,
+    const receipt = await h.publicClient.waitForTransactionReceipt({
+      hash,
       ...receiptWaitOptions,
     });
     assert.equal(receipt.status, "success");
 
-    const errTuple = (await inbox.read.errors([rid1])) as readonly [
-      `0x${string}`,
-      bigint,
-      `0x${string}`,
-    ];
-    const [errRequestId, errorCode, errorMessage] = errTuple;
-    assert.equal(errRequestId.toLowerCase(), rid1.toLowerCase());
-    assert.equal(errorCode, 1n);
-    assert.ok(errorMessage.length > 2, "error payload present");
+    const incomingOk = (await h.inbox.read.getIncomingRequest([ridOk])) as { executed: boolean };
+    assert.equal(incomingOk.executed, true);
+    const lastId = (await h.inbox.read.lastIncomingRequestId([SOURCE_CHAIN_ID])) as `0x${string}`;
+    assert.equal(lastId.toLowerCase(), ridOk.toLowerCase());
 
-    // Stored message must be far smaller than the raw revert blob.
-    const storedBytes = (errorMessage.length - 2) / 2;
-    assert.ok(
-      storedBytes < 600,
-      `stored error too large: ${storedBytes} bytes (expected capped abi.encode)`
-    );
-
-    const [prefixHash, fullLength, prefix] = decodeAbiParameters(
-      [{ type: "bytes32" }, { type: "uint256" }, { type: "bytes" }],
-      errorMessage
-    );
-    assert.equal(fullLength, LARGE_REVERT_SIZE);
-    const prefixByteLen = BigInt((prefix.length - 2) / 2);
-    assert.equal(prefixByteLen, MAX_ERROR_RETURN_DATA);
-    assert.equal(prefixHash, keccak256(prefix));
-
-    const incoming2 = (await inbox.read.getIncomingRequest([rid2])) as { executed: boolean };
-    assert.equal(incoming2.executed, true);
-
-    const lastId = (await inbox.read.lastIncomingRequestId([SOURCE_CHAIN_ID])) as `0x${string}`;
-    assert.equal(lastId.toLowerCase(), rid2.toLowerCase());
-
-    // ErrorReceived for rid1 should exist and be small.
-    let sawError = false;
-    for (const log of receipt.logs) {
-      try {
-        const decoded = decodeEventLog({
-          abi: inbox.abi,
-          data: log.data,
-          topics: log.topics,
-        });
-        if (decoded.eventName === "ErrorReceived") {
-          const args = decoded.args as { requestId: `0x${string}`; errorMessage: `0x${string}` };
-          if (args.requestId.toLowerCase() === rid1.toLowerCase()) {
-            sawError = true;
-            assert.ok((args.errorMessage.length - 2) / 2 < 600);
-          }
-        }
-      } catch {
-        // not this event
-      }
-    }
-    assert.equal(sawError, true);
+    const data = await readErrorBytes(h, ridFail);
+    assert.equal(byteLen(data), Number(MAX_ERROR_RETURN_DATA));
   });
 });

@@ -156,11 +156,12 @@ interface IInbox {
 
     // --- External: views ---
 
-    /// @notice Return error details for a failed outgoing request.
-    /// @param requestId Outbound request ID.
-    /// @return code Error code.
-    /// @return message Error message or revert data.
-    function getOutboxError(bytes32 requestId) external view returns (uint256 code, string memory message);
+    /// @notice Return error details for a failed outgoing / incoming request.
+    /// @param requestId Request ID (outbound or mined incoming).
+    /// @return code Error code (`1` = execution failed, `2` = encode failed).
+    /// @return data Stored error bytes. For execution failures this is the first ≤256 bytes of
+    ///         returndata (POD-02); decode `Error(string)` / custom errors in the client.
+    function getOutboxError(bytes32 requestId) external view returns (uint256 code, bytes memory data);
 
     /// @notice Return stored response bytes for a completed incoming flow.
     /// @param requestId Incoming request ID.
