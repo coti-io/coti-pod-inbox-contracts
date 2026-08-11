@@ -8,25 +8,27 @@ import "@coti-io/coti-contracts/contracts/pod/IInbox.sol";
 
 /// @title InboxBase
 /// @notice Core inbox: outbound requests, inbound execution context, responses, errors, and MPC calldata encoding.
-/// @dev Mixed with {InboxFeeManager}. {InboxEstimateGas} extends this for estimate-mode + miner estimate API.
-contract InboxBase is IInbox, InboxFeeManager {
-    using MinerRejectLib for MpcMethodCall;
+/// @dev Mixed with {InboxFeeManager}. {InboxEstimateGas} extends this for estimate-mode hooks.
+///      Does not inherit {IInbox}: view getters live on {InboxViews} and are served via Inbox {fallback}.
+///      The Inbox address still satisfies {IInbox} when clients attach the InboxViews ABI fragment.
+abstract contract InboxBase is InboxFeeManager {
+    using MinerRejectLib for IInbox.MpcMethodCall;
     /// @notice This chain's ID (deploy-time; may differ from `block.chainid` when `_chainId` is non-zero).
     uint256 public chainId;
 
     /// @notice Outbound requests by request id. The id encodes both source and target chain ids,
     /// so it is globally unique even though nonces are tracked per target chain.
-    mapping(bytes32 => Request) public requests;
+    mapping(bytes32 => IInbox.Request) public requests;
     /// @notice Responses sent for incoming request ids.
-    mapping(bytes32 => Response) public inboxResponses;
+    mapping(bytes32 => IInbox.Response) public inboxResponses;
     /// @notice Execution or encoding errors by request id.
-    mapping(bytes32 => Error) public errors;
+    mapping(bytes32 => IInbox.Error) public errors;
     /// @notice Incoming requests mined from remote chains, by request id (id encodes the source chain).
-    mapping(bytes32 => Request) public incomingRequests;
+    mapping(bytes32 => IInbox.Request) public incomingRequests;
     /// @notice Last contiguous incoming request id processed for each source chain.
     mapping(uint256 => bytes32) public lastIncomingRequestId;
 
-    ExecutionContext internal _currentContext;
+    IInbox.ExecutionContext internal _currentContext;
     /// @notice Per-target outbound nonce: `targetChainId => number of requests sent to that chain`.
     /// @dev Per-target so the sequence each target receives is contiguous (1,2,3,...) even when this
     /// chain sends to several targets, which is what the miner's contiguity guard relies on.
@@ -64,6 +66,7 @@ contract InboxBase is IInbox, InboxFeeManager {
     error MpcAbiReEncodeRequired();
     /// @notice Circuit breaker: outbound sends / inbound processing are paused.
     error MessageProcessingPaused();
+    error OneWayErrorSelectorNotSupported(bytes4 errorSelector);
 
     /// @notice Storage-free re-encode helper; Inbox DELEGATECALLs it (COTI). Zero on non-MPC chains.
     address public mpcAbiReEncode;
@@ -89,7 +92,7 @@ contract InboxBase is IInbox, InboxFeeManager {
 
     uint64 internal constant ERROR_CODE_EXECUTION_FAILED = 1;
     uint64 internal constant ERROR_CODE_ENCODE_FAILED = 2;
-    /// @notice Miner rejected an inbound nonce via the special reject {MpcMethodCall} encoding.
+    /// @notice Miner rejected an inbound nonce via the special reject {IInbox.MpcMethodCall} encoding.
     uint64 internal constant ERROR_CODE_MINER_REJECTED = 3;
     /// @notice Incoming request exceeded {maxMessageLife} while still execution-failed; terminalized on retry.
     uint64 internal constant ERROR_CODE_EXPIRED = 4;
@@ -150,14 +153,14 @@ contract InboxBase is IInbox, InboxFeeManager {
     ///      Indexers that already key off {IncomingResponseReceived} are unchanged; this is an additive signal.
     event ReturnLegCallbackSucceeded(bytes32 indexed requestId, bytes32 indexed returnLegRequestId);
 
-    /// @notice Request execution or encoding failed.
+    /// @notice IInbox.Request execution or encoding failed.
     event ErrorReceived(bytes32 indexed requestId, uint64 errorCode, bytes errorMessage);
 
     /// @notice Encode/system failure automatically raised an error callback to the source chain.
     /// @dev Payload is {ErrorData}; not eligible for {retryFailedRequest}.
     event SystemErrorRaised(bytes32 indexed requestId, uint64 errorCode, bytes payload);
 
-    /// @notice Emitted after executing an incoming request. Values are gas units (same basis as `Request.targetFee`).
+    /// @notice Emitted after executing an incoming request. Values are gas units (same basis as `IInbox.Request.targetFee`).
     /// @param gasUsed Gas used by the subcall (approximate).
     /// @param gasRemainingApprox Remaining gas budget from `targetFee` after the subcall (floored at zero).
     event FeeExecutionSettled(bytes32 indexed requestId, uint256 gasUsed, uint256 gasRemainingApprox);
@@ -172,13 +175,13 @@ contract InboxBase is IInbox, InboxFeeManager {
         mpcAbiReEncode = _mpcAbiReEncode;
     }
 
-    /// @inheritdoc IInbox
+    /// @notice See {IInbox}.
     /// @dev `targetChainId` is not allowlisted — integrators must pass a supported PoD lane id.
     ///      Wrong ids strand fees on an unroutable lane (user footgun, not an attacker-introduced risk).
     function sendTwoWayMessage(
         uint256 targetChainId,
         address targetContract,
-        MpcMethodCall calldata methodCall,
+        IInbox.MpcMethodCall calldata methodCall,
         bytes4 callbackSelector,
         bytes4 errorSelector,
         uint256 callbackFeeLocalWei
@@ -197,12 +200,12 @@ contract InboxBase is IInbox, InboxFeeManager {
         try priceOracle.refreshCache() {} catch {}
     }
 
-    /// @inheritdoc IInbox
+    /// @notice See {IInbox}.
     /// @dev `targetChainId` is not allowlisted — see {sendTwoWayMessage}.
     function sendOneWayMessage(
         uint256 targetChainId,
         address targetContract,
-        MpcMethodCall calldata methodCall,
+        IInbox.MpcMethodCall calldata methodCall,
         bytes4 errorSelector
     ) external payable returns (bytes32 requestId) {
         if (messageProcessingPaused) revert MessageProcessingPaused();
@@ -218,13 +221,13 @@ contract InboxBase is IInbox, InboxFeeManager {
         try priceOracle.refreshCache() {} catch {}
     }
 
-    /// @inheritdoc IInbox
+    /// @notice See {IInbox}.
     /// @dev Requires a two-way incoming request with a non-zero `callbackSelector`.
     function respond(bytes memory data) external {
         _reply(false, data);
     }
 
-    /// @inheritdoc IInbox
+    /// @notice See {IInbox}.
     /// @dev Requires a two-way incoming request with a non-zero `errorSelector`.
     function raise(bytes memory data) external {
         _reply(true, data);
@@ -232,7 +235,7 @@ contract InboxBase is IInbox, InboxFeeManager {
 
     /// @dev Shared respond/raise path. `isRaise` selects errorSelector vs callbackSelector.
     function _reply(bool isRaise, bytes memory data) private {
-        ExecutionContext memory currentContext = _currentContext;
+        IInbox.ExecutionContext memory currentContext = _currentContext;
         if (currentContext.requestId == bytes32(0) || currentContext.remoteChainId == 0) {
             revert NoActiveMessage();
         }
@@ -242,7 +245,7 @@ contract InboxBase is IInbox, InboxFeeManager {
             revert ReplyAlreadySent();
         }
 
-        Request storage incomingRequest = incomingRequests[incomingRequestId];
+        IInbox.Request storage incomingRequest = incomingRequests[incomingRequestId];
         if (incomingRequest.requestId == bytes32(0)) revert RequestNotFound();
         if (msg.sender != incomingRequest.targetContract) revert OnlyTargetCanReply();
         if (!incomingRequest.isTwoWay) revert NotTwoWayMessage();
@@ -251,7 +254,7 @@ contract InboxBase is IInbox, InboxFeeManager {
         if (!isRaise && incomingRequest.callbackSelector == bytes4(0)) revert NoCallbackHandler();
 
         bytes4 replySelector = isRaise ? incomingRequest.errorSelector : incomingRequest.callbackSelector;
-        MpcMethodCall memory replyMethodCall = MpcMethodCall({
+        IInbox.MpcMethodCall memory replyMethodCall = IInbox.MpcMethodCall({
             selector: bytes4(0),
             data: abi.encodeWithSelector(replySelector, data),
             datatypes: new bytes8[](0),
@@ -274,7 +277,7 @@ contract InboxBase is IInbox, InboxFeeManager {
             msg.sender
         );
 
-        inboxResponses[incomingRequestId] = Response({responseRequestId: outboundRequestId, response: data});
+        inboxResponses[incomingRequestId] = IInbox.Response({responseRequestId: outboundRequestId, response: data});
 
         if (_shouldEmit()) {
             if (isRaise) emit RaiseReceived(incomingRequestId, data);
@@ -282,143 +285,62 @@ contract InboxBase is IInbox, InboxFeeManager {
         }
     }
 
-    /// @inheritdoc IInbox
-    /// @dev Returns the stored `errorMessage` bytes as-is. For execution/encode failures that is the
-    ///      first ≤{MAX_ERROR_RETURN_DATA} bytes of the failure payload. Decode in the client.
-    function getOutboxError(bytes32 requestId) external view returns (uint256 code, bytes memory data) {
-        Error memory err = errors[requestId];
-        if (err.requestId == bytes32(0)) revert ErrorNotFound();
-        return (err.errorCode, err.errorMessage);
-    }
-
-    /// @inheritdoc IInbox
-    function getInboxResponse(bytes32 requestId) external view returns (bytes memory) {
-        Response memory response = inboxResponses[requestId];
-        if (response.responseRequestId == bytes32(0)) revert ResponseNotFound();
-        return response.response;
-    }
-
-    /// @inheritdoc IInbox
-    function getRequests(uint256 targetChainId, uint256 from, uint256 len)
-        external
-        view
-        returns (Request[] memory)
-    {
-        if (len == 0) {
-            return new Request[](0);
-        }
-
-        uint256 total = _requestNonce[targetChainId];
-        if (total == 0 || from >= total) {
-            return new Request[](0);
-        }
-
-        uint256 remaining = total - from;
-        uint256 actualLen = len > remaining ? remaining : len;
-        Request[] memory result = new Request[](actualLen);
-        uint256 localChainId = chainId;
-
-        for (uint256 i = 0; i < actualLen;) {
-            uint256 nonce = from + i + 1;
-            bytes32 requestId = _packRequestId(localChainId, targetChainId, nonce);
-            result[i] = requests[requestId];
-            unchecked {
-                ++i;
-            }
-        }
-
-        return result;
-    }
-
-    /// @inheritdoc IInbox
-    function getRequestsLen(uint256 targetChainId) external view returns (uint256) {
-        return _requestNonce[targetChainId];
-    }
-
-    /// @inheritdoc IInbox
-    function getRequest(bytes32 requestId) external view returns (Request memory) {
-        return requests[requestId];
-    }
-
-    /// @inheritdoc IInbox
-    function getIncomingRequest(bytes32 requestId) external view returns (Request memory) {
-        return incomingRequests[requestId];
-    }
-
-    /// @inheritdoc IInbox
+    /// @notice See {IInbox}.
     function inboxMsgSender() external view returns (uint256 chainId_, address contractAddress) {
         if (_currentContext.remoteChainId == 0 || _currentContext.requestId == bytes32(0)) revert NoActiveMessage();
 
         return (_currentContext.remoteChainId, _currentContext.remoteContract);
     }
 
-    /// @inheritdoc IInbox
+    /// @notice See {IInbox}.
     function inboxRequestId() external view returns (bytes32) {
         if (_currentContext.requestId == bytes32(0)) revert NoActiveMessage();
         return _currentContext.requestId;
     }
 
-    /// @inheritdoc IInbox
+    /// @notice See {IInbox}.
     function inboxSourceRequestId() external view returns (bytes32) {
         if (_currentContext.requestId == bytes32(0)) revert NoActiveMessage();
         return incomingRequests[_currentContext.requestId].sourceRequestId;
     }
 
-    /// @inheritdoc IInbox
-    function inboxErrorType() external view returns (InboxErrorType) {
+    /// @notice See {IInbox}.
+    function inboxErrorType() external view returns (IInbox.InboxErrorType) {
         bytes32 requestId = _currentContext.requestId;
         if (requestId == bytes32(0) || _currentContext.remoteChainId == 0) {
-            return InboxErrorType.NotErrorContext;
+            return IInbox.InboxErrorType.NotErrorContext;
         }
 
-        Request storage incoming = incomingRequests[requestId];
+        IInbox.Request storage incoming = incomingRequests[requestId];
         if (incoming.requestId == bytes32(0)) {
-            return InboxErrorType.NotErrorContext;
+            return IInbox.InboxErrorType.NotErrorContext;
         }
 
         // System-error return legs are attributed to {SYSTEM_SENDER}, not the COTI target.
         if (incoming.originalSender == SYSTEM_SENDER) {
-            return InboxErrorType.SystemError;
+            return IInbox.InboxErrorType.SystemError;
         }
 
         bytes32 sourceRequestId = incoming.sourceRequestId;
         if (sourceRequestId == bytes32(0)) {
-            return InboxErrorType.NotErrorContext;
+            return IInbox.InboxErrorType.NotErrorContext;
         }
 
-        Request storage original = requests[sourceRequestId];
+        IInbox.Request storage original = requests[sourceRequestId];
         if (original.requestId == bytes32(0) || original.errorSelector == bytes4(0)) {
-            return InboxErrorType.NotErrorContext;
+            return IInbox.InboxErrorType.NotErrorContext;
         }
 
         // Linked return leg for a request that registered an error handler (app `raise`).
         // Only Inbox creates linked legs (`raise` / `respond` / system-error); public sends use `sourceRequestId = 0`.
-        return InboxErrorType.Exception;
-    }
-
-    /// @inheritdoc IInbox
-    function getRequestId(uint256 sourceChainId, uint256 targetChainId, uint256 nonce)
-        external
-        pure
-        returns (bytes32)
-    {
-        return _packRequestId(sourceChainId, targetChainId, nonce);
-    }
-
-    /// @inheritdoc IInbox
-    function unpackRequestId(bytes32 requestId)
-        external
-        pure
-        returns (uint256 sourceChainId, uint256 targetChainId, uint256 nonce)
-    {
-        return _unpackRequestId(requestId);
+        return IInbox.InboxErrorType.Exception;
     }
 
     /// @dev Creates a two-way outbound request.
     function _sendTwoWayMessage(
         uint256 targetChainId,
         address targetContract,
-        MpcMethodCall memory methodCall,
+        IInbox.MpcMethodCall memory methodCall,
         bytes4 callbackSelector,
         bytes4 errorSelector,
         uint256 targetFeeGas,
@@ -444,7 +366,7 @@ contract InboxBase is IInbox, InboxFeeManager {
     function _sendOneWayMessage(
         uint256 targetChainId,
         address targetContract,
-        MpcMethodCall memory methodCall,
+        IInbox.MpcMethodCall memory methodCall,
         bytes4 errorSelector,
         bytes32 sourceRequestId,
         uint256 targetFeeGas,
@@ -469,7 +391,7 @@ contract InboxBase is IInbox, InboxFeeManager {
     function _createRequest(
         uint256 targetChainId,
         address targetContract,
-        MpcMethodCall memory methodCall,
+        IInbox.MpcMethodCall memory methodCall,
         bytes4 callbackSelector,
         bytes4 errorSelector,
         bool isTwoWay,
@@ -500,7 +422,7 @@ contract InboxBase is IInbox, InboxFeeManager {
 
         bytes32 requestId = _packRequestId(chainId, targetChainId, nonce);
 
-        Request memory request = Request({
+        IInbox.Request memory request = IInbox.Request({
             requestId: requestId,
             targetChainId: targetChainId,
             targetContract: targetContract,
@@ -545,7 +467,7 @@ contract InboxBase is IInbox, InboxFeeManager {
 
     /// @dev Auto-deliver a system-error payload on the same `errorSelector(bytes)` path as {raise}.
     ///      Source handlers branch with {inboxErrorType()} ({SystemError} vs {Exception}).
-    function _sendSystemErrorCallback(Request storage incomingRequest, bytes memory encodeErr) internal {
+    function _sendSystemErrorCallback(IInbox.Request storage incomingRequest, bytes memory encodeErr) internal {
         bytes memory errorMessage = encodeErr.length == 0
             ? abi.encodePacked("enc")
             : encodeErr;
@@ -555,7 +477,7 @@ contract InboxBase is IInbox, InboxFeeManager {
     /// @dev System-error return leg with an explicit error code (encode failure, miner reject, …).
     ///      When `callerFee` is zero (typical one-way), records a local {SystemErrorRaised} only — no outbound.
     function _sendSystemErrorCallbackWithCode(
-        Request storage incomingRequest,
+        IInbox.Request storage incomingRequest,
         uint64 errorCode,
         bytes memory errorMessage
     ) internal {
@@ -581,7 +503,7 @@ contract InboxBase is IInbox, InboxFeeManager {
             return;
         }
 
-        MpcMethodCall memory errorMethodCall = MpcMethodCall({
+        IInbox.MpcMethodCall memory errorMethodCall = IInbox.MpcMethodCall({
             selector: bytes4(0),
             data: abi.encodeWithSelector(incomingRequest.errorSelector, payload),
             datatypes: new bytes8[](0),
@@ -602,14 +524,14 @@ contract InboxBase is IInbox, InboxFeeManager {
         );
 
         inboxResponses[incomingRequest.requestId] =
-            Response({responseRequestId: outboundRequestId, response: payload});
+            IInbox.Response({responseRequestId: outboundRequestId, response: payload});
         if (_shouldEmit()) {
             emit SystemErrorRaised(incomingRequest.requestId, errorCode, payload);
         }
     }
 
     /// @dev Enforce {maxReplyMethodCallBytes} on respond/raise return legs.
-    function _requireReplyMethodCallBounded(MpcMethodCall memory methodCall) internal view {
+    function _requireReplyMethodCallBounded(IInbox.MpcMethodCall memory methodCall) internal view {
         uint256 weight = MinerRejectLib.structuralSize(methodCall);
         uint256 maxBytes = maxReplyMethodCallBytes;
         if (weight > maxBytes) {
@@ -618,7 +540,7 @@ contract InboxBase is IInbox, InboxFeeManager {
     }
 
     /// @dev Compact log metadata for {MessageSent} and {MessageReceived}.
-    function _methodCallLogData(MpcMethodCall memory methodCall)
+    function _methodCallLogData(IInbox.MpcMethodCall memory methodCall)
         internal
         pure
         returns (
@@ -666,7 +588,7 @@ contract InboxBase is IInbox, InboxFeeManager {
     }
 
     /// @dev Raw calldata passthrough if selector is zero; otherwise DELEGATECALL {MpcAbiReEncode}.
-    function _encodeMethodCall(MpcMethodCall memory methodCall) internal returns (bytes memory) {
+    function _encodeMethodCall(IInbox.MpcMethodCall memory methodCall) internal returns (bytes memory) {
         if (methodCall.selector == bytes4(0)) {
             if (methodCall.datatypes.length != 0) revert RawCallHasDatatypes();
             if (methodCall.datalens.length != 0) revert RawCallHasDatalens();
@@ -676,7 +598,7 @@ contract InboxBase is IInbox, InboxFeeManager {
     }
 
     /// @dev Non-reverting encode wrapper for inbound execution.
-    function _safeEncodeMethodCall(MpcMethodCall memory methodCall)
+    function _safeEncodeMethodCall(IInbox.MpcMethodCall memory methodCall)
         internal
         returns (bool ok, bytes memory callData, bytes memory err)
     {
@@ -702,7 +624,7 @@ contract InboxBase is IInbox, InboxFeeManager {
         return (true, abi.decode(ret, (bytes)), new bytes(0));
     }
 
-    function _delegateReEncodeWithGt(MpcMethodCall memory methodCall) private returns (bytes memory) {
+    function _delegateReEncodeWithGt(IInbox.MpcMethodCall memory methodCall) private returns (bytes memory) {
         address target = mpcAbiReEncode;
         if (target == address(0)) revert MpcAbiReEncodeRequired();
         (bool success, bytes memory ret) = target.delegatecall(
@@ -726,7 +648,7 @@ contract InboxBase is IInbox, InboxFeeManager {
         errorMessage = _capErrorReturnData(
             encodeErr.length == 0 ? abi.encodePacked("enc") : encodeErr
         );
-        Error memory err = Error({
+        IInbox.Error memory err = IInbox.Error({
             requestId: requestId,
             errorCode: ERROR_CODE_ENCODE_FAILED,
             errorMessage: errorMessage

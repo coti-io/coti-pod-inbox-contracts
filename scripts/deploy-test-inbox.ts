@@ -1,7 +1,10 @@
 /**
- * Deploy Inbox + {MpcAbiReEncode} for Hardhat / EDR unit tests (no CreateX).
- * Not a solc "library link" — re-encode is a normal CREATE contract passed into Inbox.init.
+ * Deploy Inbox + {MpcAbiReEncode} + {InboxViews} for Hardhat / EDR unit tests (no CreateX).
+ * Returns an Inbox-address contract with a merged Inbox+InboxViews ABI so view/estimate
+ * selectors hit Inbox {fallback} → DELEGATECALL {InboxViews}.
  */
+
+import { getContract } from "viem";
 
 type DeployOpts = Record<string, unknown> & {
   client?: {
@@ -14,29 +17,73 @@ type ViemLike = {
   deployContract: (name: string, args: unknown[], opts?: DeployOpts) => Promise<any>;
 };
 
-const codecByKey = new WeakMap<object, Promise<`0x${string}`>>();
+const codecByKey = new WeakMap<object, Promise<{ address: `0x${string}`; abi: readonly any[] }>>();
+const viewsByKey = new WeakMap<object, Promise<{ address: `0x${string}`; abi: readonly any[] }>>();
 
-/** Deploy (or reuse) {MpcAbiReEncode}, then deploy Inbox. */
+const mergeAbis = (baseAbi: readonly any[], extraAbi: readonly any[]): any[] => {
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const item of [...baseAbi, ...extraAbi]) {
+    if (item?.type === "function") {
+      const key = `${item.name}:${(item.inputs ?? []).map((i: any) => i.type).join(",")}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    out.push(item);
+  }
+  return out;
+};
+
+/** Deploy (or reuse) helpers, then deploy Inbox bound with merged ABI. */
 export const deployTestInbox = async (
   viem: ViemLike,
   opts?: DeployOpts
-): Promise<any & { mpcAbiReEncode: `0x${string}` }> => {
+): Promise<any & { mpcAbiReEncode: `0x${string}`; inboxViews: `0x${string}` }> => {
   const walletKey = (opts?.client?.wallet ?? viem) as object;
+
   let codecPromise = codecByKey.get(walletKey);
   if (!codecPromise) {
     codecPromise = (async () => {
       const codec = await viem.deployContract("MpcAbiReEncode", [], opts);
-      return codec.address as `0x${string}`;
+      return { address: codec.address as `0x${string}`, abi: codec.abi as readonly any[] };
     })();
     codecByKey.set(walletKey, codecPromise);
   }
-  const mpcAbiReEncode = await codecPromise;
+
+  let viewsPromise = viewsByKey.get(walletKey);
+  if (!viewsPromise) {
+    viewsPromise = (async () => {
+      const views = await viem.deployContract("InboxViews", [], opts);
+      return { address: views.address as `0x${string}`, abi: views.abi as readonly any[] };
+    })();
+    viewsByKey.set(walletKey, viewsPromise);
+  }
+
+  const codec = await codecPromise;
+  const views = await viewsPromise;
   const inbox = await viem.deployContract("Inbox", [], opts);
-  Object.defineProperty(inbox, "mpcAbiReEncode", {
-    value: mpcAbiReEncode,
+  const mergedAbi = mergeAbis(inbox.abi as readonly any[], views.abi);
+
+  const publicClient = opts?.client?.public as any;
+  const walletClient = opts?.client?.wallet as any;
+  const bound =
+    publicClient != null
+      ? (getContract({
+          address: inbox.address as `0x${string}`,
+          abi: mergedAbi,
+          client: { public: publicClient, wallet: walletClient },
+        }) as any)
+      : Object.assign(inbox, { abi: mergedAbi });
+
+  Object.defineProperty(bound, "mpcAbiReEncode", {
+    value: codec.address,
     enumerable: true,
   });
-  return inbox as any;
+  Object.defineProperty(bound, "inboxViews", {
+    value: views.address,
+    enumerable: true,
+  });
+  return bound as any;
 };
 
 /** Address of the shared test {MpcAbiReEncode} for a prior {deployTestInbox} call. */
@@ -45,3 +92,22 @@ export const mpcAbiReEncodeOf = (inbox: { mpcAbiReEncode?: `0x${string}` }): `0x
   if (!addr) throw new Error("mpcAbiReEncodeOf: missing address (deploy via deployTestInbox)");
   return addr;
 };
+
+/** Address of the shared test {InboxViews} for a prior {deployTestInbox} call. */
+export const inboxViewsOf = (inbox: { inboxViews?: `0x${string}` }): `0x${string}` => {
+  const addr = inbox.inboxViews;
+  if (!addr) throw new Error("inboxViewsOf: missing address (deploy via deployTestInbox)");
+  return addr;
+};
+
+/** Standard init args: owner, chainId, mpcAbiReEncode, inboxViews. */
+export const inboxInitArgs = (
+  inbox: { mpcAbiReEncode?: `0x${string}`; inboxViews?: `0x${string}` },
+  owner: `0x${string}`,
+  chainId: bigint
+): [`0x${string}`, bigint, `0x${string}`, `0x${string}`] => [
+  owner,
+  chainId,
+  mpcAbiReEncodeOf(inbox),
+  inboxViewsOf(inbox),
+];

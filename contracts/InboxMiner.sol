@@ -10,10 +10,12 @@ import "./lib/MinerRejectLib.sol";
 
 /// @title InboxMiner
 /// @notice Miner-driven inbox: ingest mined payloads, execute targets, and collect fees.
-/// @dev Inherits {InboxEstimateGas} for {estimateExecutionGasForMiner} and estimate-mode hooks.
+/// @dev Inherits {InboxEstimateGas} for estimate-mode hooks. Public {estimateExecutionGasForMiner}
+///      is abstract here and implemented on {Inbox} via DELEGATECALL to {InboxViews}.
 abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, ReentrancyGuard {
     error NoncesNotContiguous();
     error RequestAlreadyProcessed();
+    error EstimateHookUnauthorized();
 
     using MinerRejectLib for IInbox.MpcMethodCall;
     /// @notice Gas reserved after the target subcall so failure accounting can always commit.
@@ -29,7 +31,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         emit MessageProcessingPausedUpdated(paused);
     }
 
-    /// @inheritdoc IInboxMiner
+    /// @notice See {IInboxMiner}.
     function batchProcessRequests(uint256 sourceChainId, MinedRequest[] memory mined)
         external
         onlyMiner
@@ -66,7 +68,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
             unchecked {
                 ++allowedNonce;
             }
-            Request storage incomingRequest = incomingRequests[requestId];
+            IInbox.Request storage incomingRequest = incomingRequests[requestId];
             if (incomingRequest.requestId != bytes32(0)) revert RequestAlreadyProcessed();
             if (minedRequest.sourceContract == address(0)) revert InvalidSourceContract();
             if (minedRequest.targetContract == address(0)) revert InvalidTargetContract();
@@ -95,7 +97,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
                     revert FeeGasTooHigh(minedRequest.callerFee, maxExecutionGas);
                 }
 
-                Request memory newIncomingRequest = Request({
+                IInbox.Request memory newIncomingRequest = IInbox.Request({
                     requestId: requestId,
                     targetChainId: sourceChainId,
                     targetContract: minedRequest.targetContract,
@@ -136,7 +138,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
                 if (incomingRequest.requestId != bytes32(0) && incomingRequest.sourceRequestId != bytes32(0)
                     && !incomingRequest.isTwoWay) {
                     bytes32 originalRequestId = incomingRequest.sourceRequestId;
-                    Request storage originalRequest = requests[originalRequestId];
+                    IInbox.Request storage originalRequest = requests[originalRequestId];
 
                     if (originalRequest.requestId != bytes32(0) && !originalRequest.executed) {
                         originalRequest.executed = true;
@@ -159,21 +161,21 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
 
     /// @dev Contiguous reject: store header only (empty methodCall), emit, system-error if two-way.
     function _ingestMinerReject(
-        Request storage incomingRequest,
+        IInbox.Request storage incomingRequest,
         MinedRequest memory minedRequest,
         uint256 sourceChainId,
         bytes32 requestId,
         uint8 rejectionCode,
         bytes32 rejectionReason
     ) private {
-        MpcMethodCall memory emptyCall = MpcMethodCall({
+        IInbox.MpcMethodCall memory emptyCall = IInbox.MpcMethodCall({
             selector: bytes4(0),
             data: new bytes(0),
             datatypes: new bytes8[](0),
             datalens: new bytes32[](0)
         });
 
-        incomingRequests[requestId] = Request({
+        incomingRequests[requestId] = IInbox.Request({
             requestId: requestId,
             targetChainId: sourceChainId,
             targetContract: minedRequest.targetContract,
@@ -191,7 +193,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         });
 
         bytes memory reasonBytes = abi.encodePacked(rejectionReason);
-        errors[requestId] = Error({
+        errors[requestId] = IInbox.Error({
             requestId: requestId,
             errorCode: ERROR_CODE_MINER_REJECTED,
             errorMessage: reasonBytes
@@ -205,7 +207,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
 
         if (incomingRequest.sourceRequestId != bytes32(0) && !incomingRequest.isTwoWay) {
             bytes32 originalRequestId = incomingRequest.sourceRequestId;
-            Request storage originalRequest = requests[originalRequestId];
+            IInbox.Request storage originalRequest = requests[originalRequestId];
             if (originalRequest.requestId != bytes32(0) && !originalRequest.executed) {
                 originalRequest.executed = true;
                 emit IncomingResponseReceived(originalRequestId, incomingRequest.requestId);
@@ -256,24 +258,34 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
 
     /// @inheritdoc InboxEstimateGas
     function _runEstimateIncomingExecution(
-        Request storage incomingRequest,
+        IInbox.Request storage incomingRequest,
         uint256 sourceChainId,
         uint256 maxUserGas
     ) internal override returns (uint256 gasUsed) {
         return _runIncomingExecution(incomingRequest, sourceChainId, IncomingExecKind.Estimate, maxUserGas);
     }
 
-    /// @inheritdoc IInboxMiner
-    /// @dev Body in {InboxEstimateGas._estimateExecutionGasForMiner}.
+    /// @notice Estimate-only hook for {InboxViews} (external self-call under DELEGATECALL).
+    /// @dev Reverts unless `msg.sender == address(this)` (Inbox calling itself).
+    function runEstimateIncomingExecution(bytes32 requestId, uint256 sourceChainId, uint256 maxUserGas)
+        external
+        returns (uint256 gasUsed)
+    {
+        if (msg.sender != address(this)) {
+            revert EstimateHookUnauthorized();
+        }
+        return _runIncomingExecution(incomingRequests[requestId], sourceChainId, IncomingExecKind.Estimate, maxUserGas);
+    }
+
+    /// @notice See {IInboxMiner}.
+    /// @dev Implemented on {Inbox} via DELEGATECALL to {InboxViews}.
     function estimateExecutionGasForMiner(
         uint256 sourceChainId,
         MinedRequest calldata mined,
         uint256 maxUserGas
-    ) external override {
-        _estimateExecutionGasForMiner(sourceChainId, mined, maxUserGas);
-    }
+    ) external virtual;
 
-    /// @inheritdoc IInboxMiner
+    /// @notice See {IInboxMiner}.
     function collectFees(address payable to) external onlyOwner {
         _collectFees(to);
     }
@@ -291,7 +303,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         if (requestId == bytes32(0)) {
             revert RequestIdRequired();
         }
-        Request storage incomingRequest = incomingRequests[requestId];
+        IInbox.Request storage incomingRequest = incomingRequests[requestId];
         (uint256 sourceChainId,,) = _unpackRequestId(requestId);
         uint256 errorCode = errors[requestId].errorCode;
         if (!incomingRequest.executed || errorCode != ERROR_CODE_EXECUTION_FAILED) {
@@ -308,18 +320,18 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
     }
 
     /// @dev Executes one mined request: encode calldata, call target with `gas` from `targetFee`, record errors.
-    function _executeIncomingRequest(Request storage incomingRequest, uint256 sourceChainId) internal {
+    function _executeIncomingRequest(IInbox.Request storage incomingRequest, uint256 sourceChainId) internal {
         _runIncomingExecution(incomingRequest, sourceChainId, IncomingExecKind.Mine, 0);
     }
 
     /// @dev Shared mine / estimate / retry execution path.
     function _runIncomingExecution(
-        Request storage incomingRequest,
+        IInbox.Request storage incomingRequest,
         uint256 sourceChainId,
         IncomingExecKind kind,
         uint256 maxUserGas
     ) private returns (uint256 gasUsed) {
-        _currentContext = ExecutionContext({
+        _currentContext = IInbox.ExecutionContext({
             remoteChainId: sourceChainId,
             remoteContract: incomingRequest.originalSender,
             requestId: incomingRequest.requestId
@@ -377,7 +389,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
 
         if (!success) {
             bytes32 rid = incomingRequest.requestId;
-            errors[rid] = Error({
+            errors[rid] = IInbox.Error({
                 requestId: rid,
                 errorCode: ERROR_CODE_EXECUTION_FAILED,
                 errorMessage: returnData
@@ -389,7 +401,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
     }
 
     function _clearExecutionContext() private {
-        _currentContext = ExecutionContext({remoteChainId: 0, remoteContract: address(0), requestId: bytes32(0)});
+        _currentContext = IInbox.ExecutionContext({remoteChainId: 0, remoteContract: address(0), requestId: bytes32(0)});
     }
 
     /// @dev Cap user subcall gas by prepaid budget, outer reserve, and optional maxUserGas (0 = uncapped).

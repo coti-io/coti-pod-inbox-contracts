@@ -66,7 +66,14 @@ const main = async () => {
   const initData = encodeFunctionData({
     abi: artifact.abi,
     functionName: "init",
-    args: [deployer, 0n, "0x0000000000000000000000000000000000000000"],
+    args: [
+      deployer,
+      0n,
+      "0x0000000000000000000000000000000000000000",
+      // Determinism check only validates CreateX address prediction; views can be zero and
+      // init would revert — deploy a throwaway InboxViews first when exercising full init.
+      "0x0000000000000000000000000000000000000001",
+    ],
   });
 
   const { result } = await publicClient.simulateContract({

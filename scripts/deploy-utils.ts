@@ -763,15 +763,19 @@ export const deployDeterministicInbox = async (params: {
   deployReEncode?: boolean;
   /** From deployConfig (`mpcAbiCodecSalt.label`). Required when deployReEncode. */
   reEncodeSaltLabel?: string;
+  /** Optional CREATE3 salt label for {InboxViews}; defaults to `${saltLabel}.views`. */
+  viewsSaltLabel?: string;
 }): Promise<
   DeployInboxDeterministicResult & {
     inbox: any;
     deployer: `0x${string}`;
     mpcAbiReEncode: Address;
+    inboxViews: Address;
   }
 > => {
   const deployer = await resolveDeployerAddress(params.walletClient);
   let mpcAbiReEncode: Address = zeroAddress;
+  let inboxViews: Address = zeroAddress;
   if (params.deployReEncode || params.reEncodeSaltLabel) {
     if (!params.reEncodeSaltLabel?.trim()) {
       throw new Error(
@@ -806,6 +810,22 @@ export const deployDeterministicInbox = async (params: {
     mpcAbiReEncode = getAddress(codecDeploy.address);
   }
 
+  {
+    const viewsPath = path.resolve(process.cwd(), "artifacts/contracts/InboxViews.sol/InboxViews.json");
+    const json = JSON.parse(await fs.readFile(viewsPath, "utf8")) as { bytecode?: string };
+    if (!json.bytecode?.startsWith("0x")) {
+      throw new Error("deployDeterministicInbox: InboxViews artifact missing (compile first)");
+    }
+    const viewsDeploy = await deployCreate3Deterministic({
+      publicClient: params.publicClient,
+      walletClient: params.walletClient,
+      deployer,
+      bytecode: json.bytecode as `0x${string}`,
+      saltLabel: params.viewsSaltLabel?.trim() || `${params.saltLabel}.views`,
+    });
+    inboxViews = getAddress(viewsDeploy.address);
+  }
+
   const artifact = await readInboxArtifact();
 
   const result = await deployInboxViaCreateX({
@@ -816,6 +836,7 @@ export const deployDeterministicInbox = async (params: {
     artifact,
     saltLabel: params.saltLabel,
     mpcAbiReEncode,
+    inboxViews,
   });
   const inbox = await params.viem.getContractAt("Inbox", result.address, {
     client: { public: params.publicClient, wallet: params.walletClient },
@@ -838,6 +859,7 @@ export const deployDeterministicInbox = async (params: {
     inbox,
     deployer,
     mpcAbiReEncode,
+    inboxViews,
   };
 };
 

@@ -42,10 +42,8 @@ abstract contract MinerBase is Ownable2Step {
         emit MinerRemoved(miner);
     }
 
-    /// @notice Whether `miner` is registered.
-    /// @param miner Address to query.
-    /// @return True if registered.
-    function isMiner(address miner) external view returns (bool) {
+    /// @dev Whether `miner` is registered (used by {InboxViews.isMiner} under DELEGATECALL).
+    function _isMiner(address miner) internal view returns (bool) {
         return _miners[miner];
     }
 }

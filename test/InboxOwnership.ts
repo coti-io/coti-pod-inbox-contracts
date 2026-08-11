@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { network } from "hardhat";
-import { deployTestInbox, mpcAbiReEncodeOf } from "../scripts/deploy-test-inbox.js";
+import { deployTestInbox, mpcAbiReEncodeOf, inboxInitArgs } from "../scripts/deploy-test-inbox.js";
 
 describe("Inbox ownership controls", { concurrency: false, timeout: 300_000 }, () => {
   it("renounceOwnership reverts; transferOwnership is two-step", async () => {
@@ -14,7 +14,7 @@ describe("Inbox ownership controls", { concurrency: false, timeout: 300_000 }, (
     const inbox = await deployTestInbox(viem, {
       client: { public: publicClient, wallet: ownerWallet },
     });
-    await inbox.write.init([owner, 1000n, mpcAbiReEncodeOf(inbox)], { account: owner });
+    await inbox.write.init(inboxInitArgs(inbox, owner, 1000n), { account: owner });
 
     await assert.rejects(
       () => inbox.write.renounceOwnership({ account: owner }),

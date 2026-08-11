@@ -146,6 +146,8 @@ export type DeployInboxDeterministicParams = {
    * Defaults to zero address when omitted.
    */
   mpcAbiReEncode?: Address;
+  /** {InboxViews} extension address (required; DELEGATECALL target for views/estimate). */
+  inboxViews: Address;
 };
 
 export type DeployInboxDeterministicResult = {
@@ -222,7 +224,7 @@ export const deployCreate3Deterministic = async (
 export const deployInboxDeterministic = async (
   params: DeployInboxDeterministicParams
 ): Promise<DeployInboxDeterministicResult> => {
-  const { publicClient, walletClient, deployer, chainId, artifact, saltLabel, mpcAbiReEncode } =
+  const { publicClient, walletClient, deployer, chainId, artifact, saltLabel, mpcAbiReEncode, inboxViews } =
     params;
 
   if (!(await isCreateXAvailable(publicClient))) {
@@ -237,6 +239,10 @@ export const deployInboxDeterministic = async (
     );
   }
 
+  if (!inboxViews || inboxViews === ("0x0000000000000000000000000000000000000000" as Address)) {
+    throw new Error("deployInboxDeterministic: inboxViews address required");
+  }
+
   const salt = buildInboxSalt(deployer, saltLabel);
   const predictedAddress = await precomputeCreate3Address(publicClient, deployer, salt);
 
@@ -247,7 +253,12 @@ export const deployInboxDeterministic = async (
   const initData = encodeFunctionData({
     abi: artifact.abi,
     functionName: "init",
-    args: [deployer, chainId, mpcAbiReEncode ?? ("0x0000000000000000000000000000000000000000" as Address)],
+    args: [
+      deployer,
+      chainId,
+      mpcAbiReEncode ?? ("0x0000000000000000000000000000000000000000" as Address),
+      inboxViews,
+    ],
   });
 
   // Simulate first (read-only): catches reverts and confirms the returned address matches.
