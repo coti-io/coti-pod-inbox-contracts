@@ -21,17 +21,27 @@ const codecByKey = new WeakMap<object, Promise<{ address: `0x${string}`; abi: re
 const viewsByKey = new WeakMap<object, Promise<{ address: `0x${string}`; abi: readonly any[] }>>();
 
 const mergeAbis = (baseAbi: readonly any[], extraAbi: readonly any[]): any[] => {
-  const seen = new Set<string>();
-  const out: any[] = [];
-  for (const item of [...baseAbi, ...extraAbi]) {
+  // Prefer facet (InboxViews) function entries when present so clients keep `read.*` / view
+  // eth_call UX even though on-chain Inbox stubs are non-view (delegatecall requirement).
+  const byKey = new Map<string, any>();
+  const order: string[] = [];
+  const keyOf = (item: any) => {
     if (item?.type === "function") {
-      const key = `${item.name}:${(item.inputs ?? []).map((i: any) => i.type).join(",")}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      return `fn:${item.name}:${(item.inputs ?? []).map((i: any) => i.type).join(",")}`;
     }
-    out.push(item);
+    return `other:${JSON.stringify(item)}`;
+  };
+  for (const item of baseAbi) {
+    const k = keyOf(item);
+    if (!byKey.has(k)) order.push(k);
+    byKey.set(k, item);
   }
-  return out;
+  for (const item of extraAbi) {
+    const k = keyOf(item);
+    if (!byKey.has(k)) order.push(k);
+    byKey.set(k, item); // facet overwrites stub mutability
+  }
+  return order.map((k) => byKey.get(k));
 };
 
 /** Deploy (or reuse) helpers, then deploy Inbox bound with merged ABI. */

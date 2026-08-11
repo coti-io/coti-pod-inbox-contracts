@@ -5,7 +5,7 @@ import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 
 import "./InboxMiner.sol";
-import "./modules/ModuleCallBase.sol";
+import "./modules/InboxViewsStubBase.sol";
 
 /// @title Inbox
 /// @notice Production inbox: combines {InboxMiner} routing with {MinerBase} access control.
@@ -16,9 +16,10 @@ import "./modules/ModuleCallBase.sol";
 /// Do **not** call `_disableInitializers()` here: this contract *is* the live instance (no separate
 /// implementation), and `{init}` must remain callable exactly once via the atomic CreateX path.
 ///
-/// Read/estimate APIs (`getRequest`, `isMiner`, `estimateExecutionGasForMiner`, …) live on {InboxViews}
-/// and are reached via {fallback} DELEGATECALL. Clients call this address with an Inbox+InboxViews ABI.
-contract Inbox is InboxMiner, Initializable, ModuleCallBase {
+/// Read/estimate APIs live on {InboxViews}. Inbox exposes explorer stubs ({InboxViewsStubBase}) plus
+/// {fallback} that DELEGATECALL into {inboxViews}. Stubs are not `view` (Solidity forbids delegatecall
+/// in view); `eth_call` / static outer context still works.
+contract Inbox is InboxMiner, Initializable, InboxViewsStubBase {
     /// @dev Placeholder owner until {init}; fixed address keeps creation bytecode identical on every chain.
     ///      After atomic init, owner must be the intended admin (deploy scripts assert `owner() != address(1)`).
     constructor() Ownable(address(1)) {}
@@ -55,21 +56,12 @@ contract Inbox is InboxMiner, Initializable, ModuleCallBase {
         external
         override
     {
-        _delegateModule(inboxViews, msg.data);
+        _forwardToViews();
     }
 
-    /// @dev Diamond-style router: unknown selectors DELEGATECALL into {inboxViews}.
+    /// @dev Catch-all for any other {InboxViews} selectors not listed as stubs.
     fallback() external payable {
-        address ext = inboxViews;
-        if (ext == address(0)) revert ModuleNotConfigured(ext);
-        assembly ("memory-safe") {
-            calldatacopy(0, 0, calldatasize())
-            let result := delegatecall(gas(), ext, 0, calldatasize(), 0, 0)
-            returndatacopy(0, 0, returndatasize())
-            switch result
-            case 0 { revert(0, returndatasize()) }
-            default { return(0, returndatasize()) }
-        }
+        _forwardToViews();
     }
 
     /// @dev Reject plain ETH transfers; payable entrypoints are explicit send APIs.
