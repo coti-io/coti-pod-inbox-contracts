@@ -306,4 +306,31 @@ abstract contract InboxFeeManager {
             + (uint256(feeConfig.errorLength) * uint256(feeConfig.gasPerByte));
         return gasUnits * (10000 + uint256(feeConfig.bufferRatioX10000)) / 10000;
     }
+
+    /// @notice Rough local-token wei cost at `gasPrice` for a two-way send (UI / off-chain quotes).
+    /// @dev Inlined from former {InboxFeeQuoter}; only {MpcAbiReEncode} stays a separate DELEGATECALL helper.
+    function calculateTwoWayFeeRequiredInLocalToken(
+        FeeConfig calldata localMin,
+        FeeConfig calldata remoteMin,
+        uint256 localTokenPrice,
+        uint256 remoteTokenPrice,
+        uint256 remoteMethodCallSize,
+        uint256 callBackMethodCallSize,
+        uint256 remoteMethodExecutionGas,
+        uint256 callBackMethodExecutionGas,
+        uint256 gasPrice
+    ) external pure returns (uint256 targetFeeLocalWei, uint256 callerFeeLocalWei) {
+        uint256 targetGasRemoteUnits = expectedMinFee(remoteMethodCallSize, remoteMin) + remoteMethodExecutionGas;
+        uint256 callerGasLocalUnits = expectedMinFee(callBackMethodCallSize, localMin) + callBackMethodExecutionGas;
+        targetGasRemoteUnits = Math.mulDiv(
+            targetGasRemoteUnits, uint256(remoteMin.gasPriceDiv), uint256(remoteMin.gasPriceMul), Math.Rounding.Ceil
+        );
+        callerGasLocalUnits = Math.mulDiv(
+            callerGasLocalUnits, uint256(localMin.gasPriceDiv), uint256(localMin.gasPriceMul), Math.Rounding.Ceil
+        );
+        uint256 targetGasLocalUnits =
+            Math.mulDiv(targetGasRemoteUnits, remoteTokenPrice, localTokenPrice, Math.Rounding.Ceil);
+        targetFeeLocalWei = targetGasLocalUnits * gasPrice;
+        callerFeeLocalWei = callerGasLocalUnits * gasPrice;
+    }
 }

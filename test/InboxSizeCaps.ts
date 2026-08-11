@@ -67,9 +67,7 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
     await source.write.setPriceOracle([oracle.address], { account: deployer });
     await target.write.setPriceOracle([oracle.address], { account: deployer });
 
-    const rejectTools = await viem.deployContract("MinerRejectTools", [], {
-      client: { public: publicClient, wallet },
-    });
+    const rejectTools = source;
 
     return { ...env, source, target, rejectTools };
   };

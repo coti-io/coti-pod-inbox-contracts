@@ -434,12 +434,8 @@ describe(
           localTokenPriceUsd18;
         const expectedCallerWei = (minLocalGasForHint + EXEC_GAS) * gp;
         const expectedTargetWei = targetGasLocalUnits * gp;
-        // Fee quote lives on {InboxFeeQuoter} (not Inbox) to keep create bytecode under the limit.
-        const { viem, wallet } = await getCtx();
-        const quoter = await viem.deployContract("InboxFeeQuoter", [], {
-          client: { public: publicClient, wallet },
-        });
-        const [targetWeiEst, callerWeiEst] = await quoter.read.calculateTwoWayFeeRequiredInLocalToken([
+        // Fee quote inlined on Inbox (only {MpcAbiReEncode} stays a separate DELEGATECALL helper).
+        const [targetWeiEst, callerWeiEst] = await inbox.read.calculateTwoWayFeeRequiredInLocalToken([
           { ...LOCAL_TEMPLATE },
           { ...remoteConstantOnly },
           localTokenPriceUsd18,
