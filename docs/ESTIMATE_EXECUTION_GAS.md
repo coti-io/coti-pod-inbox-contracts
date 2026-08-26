@@ -30,6 +30,8 @@ error ExecutionGasEstimate(uint256 gasUsed, uint256 responseDataSize, uint256 er
 - While estimating, inbox skips emits and tags reply creates via `_estimateReplyKind`.
 - Nested `call{gas: stipend}` with `ESTIMATE_OUTER_RESERVE` so adaptive burn cannot OOG before the revert encode.
 - Live mine path reserves `POST_CALL_GAS_RESERVE = 200_000` after the target subcall so failure accounting can commit (mirrored in PEI `scripts/inbox-mine-gas.ts`).
+- First mine **reverts** `{InsufficientMinerGas}` unless `gasForCall` equals the prepaid `_localRequestExecutionBudget(targetFee)`. Starved `batchProcessRequests` does not ingest and does not consume the nonce. `eth_estimateGas` of that tx searches **up** onto the prepaid-delivery path (not the old `ErrorReceived` success).
+- `retryFailedRequest` is only for committed `ERROR_CODE_EXECUTION_FAILED` after a delivered stipend — not for reverted starved mines.
 
 `stipend = min(maxUserGas, executionBudget(targetFee), gasleft() - ESTIMATE_OUTER_RESERVE)`.
 
@@ -49,10 +51,12 @@ Python port: `contract-manager-service/app/modules/pod-inbox-relay/mine_gas.py`)
 
 1. Per pending request: call `estimateExecutionGasForMiner` → `gasUsed`.
 2. Apply configurable user-gas buffer (BPS + absolute).
-3. Project per-request cost = buffered user gas + reply overhead + fixed overheads + `POST_CALL_GAS_RESERVE`.
+3. Project per-request cost = buffered user gas + reply overhead + fixed overheads + `POST_CALL_GAS_RESERVE`, **floored at prepaid `targetGasBudget` + overhead + `POST_CALL_GAS_RESERVE`**. Packing by user-gas alone over-selects; `eth_estimateGas` of an over-packed batch needs the sum of prepaid stipends and can exceed the block gas limit.
 4. Greedy-pack requests while projected sum ≤ `maxBatchGas`.
-5. `eth_estimateGas` the encoded `batchProcessRequests` tx.
+5. `eth_estimateGas` the encoded `batchProcessRequests` tx (now a **lower bound** near prepaid delivery, not a starved `ErrorReceived` path).
 6. `gasLimit = max(projectedBatchGas, eth_estimateGas)` — projection floors estimateGas griefing; eth_estimateGas covers real outer costs.
+
+Do not set a miner `gasLimit` below prepaid budget + `POST_CALL_GAS_RESERVE` (CMS `max_gas_limit` pin). After this inbox, that pin revert-loops with `InsufficientMinerGas`. Omit the pin so HWS `eth_estimateGas` searches up, or raise it to cover prepaid. Do not omit it against the **old** inbox — that re-enables starved estimateGas.
 
 Do not re-apply `gasPriceMul`/`gasPriceDiv` when interpreting estimates (prepaid `targetFee` already includes skew).
 

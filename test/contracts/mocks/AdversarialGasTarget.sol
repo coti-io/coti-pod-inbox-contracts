@@ -15,7 +15,9 @@ contract AdversarialGasTarget {
         /// @dev Cheap when `gasleft()` is low (estimateGas binary search), expensive when high (real mine).
         EstimateGasGrief,
         RevertAfterBurn,
-        EmptySuccess
+        EmptySuccess,
+        /// @dev Loop until the forwarded stipend OOGs (unlike {_burn}, which stops at 40k leftover).
+        BurnUntilOog
     }
 
     Mode public mode;
@@ -43,6 +45,9 @@ contract AdversarialGasTarget {
         Mode m = mode;
         if (m == Mode.EmptySuccess) {
             return;
+        }
+        if (m == Mode.BurnUntilOog) {
+            while (true) {}
         }
         if (m == Mode.EstimateGasGrief) {
             if (gasleft() > griefThreshold) {

@@ -325,8 +325,9 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
     }
 
     /// @dev Miner-only recovery for an execution-failed request. The miner pays destination gas;
-    ///      the call uses `gasleft()` rather than the prepaid `targetFee` so an under-budget first
-    ///      mine can still recover. dApps must treat delivery timing as adversarial
+    ///      the call uses `gasleft()` rather than the prepaid `targetFee` so a delivered-but-still-failed
+    ///      first mine can recover (app OOG / revert after full stipend). Miner-starved first mines revert
+    ///      {IInboxMiner.InsufficientMinerGas} and never ingest. dApps must treat delivery timing as adversarial
     ///      (`targetFee` is miner best-effort for the initial mine only).
     ///      If {maxMessageLife} has elapsed since dest ingest, terminalizes instead (system-error return when funded).
     /// @param requestId The ID of the incoming request to retry.
@@ -396,6 +397,10 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
             uint256 outerReserve =
                 kind == IncomingExecKind.Estimate ? ESTIMATE_OUTER_RESERVE : POST_CALL_GAS_RESERVE;
             gasForCall = _computeUserCallGas(targetGasBudget, outerReserve, maxUserGas);
+        }
+
+        if (kind == IncomingExecKind.Mine && gasForCall < targetGasBudget) {
+            revert IInboxMiner.InsufficientMinerGas(incomingRequest.requestId, gasForCall, targetGasBudget);
         }
 
         uint256 gasBeforeSubcall = gasleft();
