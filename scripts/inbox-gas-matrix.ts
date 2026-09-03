@@ -2,6 +2,7 @@ import { encodeFunctionData, zeroHash } from "viem";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "./oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "./deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "./test-helpers/verifier.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -59,6 +60,7 @@ const main = async () => {
   const source = await deployInbox(SOURCE_CHAIN_ID, true);
   const targetInbox = await deployInbox(TARGET_CHAIN_ID, false);
   await targetInbox.write.addMiner([deployer], { account: deployer });
+  await enableInboxAuth(targetInbox, deployer);
 
   const target = await viem.deployContract("InboxGasTarget", [targetInbox.address], {
     client: { public: publicClient, wallet },
@@ -111,7 +113,8 @@ const main = async () => {
 
   await record(
     "batchProcessRequests.raw.success",
-    await targetInbox.write.batchProcessRequests([SOURCE_CHAIN_ID, [await mined(1n, observeData)]], {
+    await targetInbox.write.batchProcessRequests(
+      await mineArgs(targetInbox, SOURCE_CHAIN_ID, [await mined(1n, observeData)]), {
       account: deployer,
       gas: 4_000_000n,
     })
@@ -119,7 +122,8 @@ const main = async () => {
 
   await record(
     "batchProcessRequests.raw.respond",
-    await targetInbox.write.batchProcessRequests([SOURCE_CHAIN_ID, [await mined(2n, respondData, true, TARGET_GAS_UNITS)]], {
+    await targetInbox.write.batchProcessRequests(
+      await mineArgs(targetInbox, SOURCE_CHAIN_ID, [await mined(2n, respondData, true, TARGET_GAS_UNITS)]), {
       account: deployer,
       gas: 5_000_000n,
     })
@@ -130,7 +134,8 @@ const main = async () => {
   const failedRequest = await mined(3n, observeData);
   await record(
     "batchProcessRequests.raw.failure",
-    await targetInbox.write.batchProcessRequests([SOURCE_CHAIN_ID, [failedRequest]], {
+    await targetInbox.write.batchProcessRequests(
+      await mineArgs(targetInbox, SOURCE_CHAIN_ID, [failedRequest]), {
       account: deployer,
       gas: 4_000_000n,
     })

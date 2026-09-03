@@ -1,5 +1,5 @@
-import { createPublicClient, createWalletClient, http } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { concat, createPublicClient, createWalletClient, http, toHex, type Hex } from "viem";
+import { privateKeyToAccount, sign } from "viem/accounts";
 import { hardhat } from "viem/chains";
 import { RelayNode } from "../relay-node.js";
 import { INBOX_ABI } from "./inbox-abi.js";
@@ -148,16 +148,7 @@ export class RelayHelper {
       if (msg.requestId && msg.sender) {
         try {
           const gas = batchGasForMinedRequests([{ targetFee: msg.targetFee ?? 0n }]);
-          await this.chain2Wallet.writeContract({
-            address: this.inbox2Address,
-            abi: INBOX_ABI,
-            functionName: "batchProcessRequests",
-            chain: { ...hardhat, id: this.chain2Id },
-            account: this.account,
-            args: [
-              BigInt(this.chain1Id),
-              [
-                {
+          const minedItem = {
                   requestId: msg.requestId,
                   sourceContract: msg.sender as `0x${string}`,
                   targetContract: msg.targetContract ?? "0x0000000000000000000000000000000000000000",
@@ -174,9 +165,14 @@ export class RelayHelper {
                     msg.sourceRequestId ?? "0x0000000000000000000000000000000000000000000000000000000000000000",
                   targetFee: msg.targetFee ?? 0n,
                   callerFee: msg.callerFee ?? 0n,
-                },
-              ],
-            ],
+                };
+          await this.chain2Wallet.writeContract({
+            address: this.inbox2Address,
+            abi: INBOX_ABI,
+            functionName: "batchProcessRequests",
+            chain: { ...hardhat, id: this.chain2Id },
+            account: this.account,
+            args: await this.signMineArgs([minedItem]),
             gas,
           } as any);
           relayed++;
@@ -206,6 +202,21 @@ export class RelayHelper {
 
   private getTupleField<T>(value: any, key: string, index: number): T | undefined {
     return (value?.[key] ?? value?.[index]) as T | undefined;
+  }
+
+  private async signMineArgs(
+    mined: readonly unknown[]
+  ): Promise<[bigint, readonly unknown[], Hex]> {
+    const sourceChainId = BigInt(this.chain1Id);
+    const digest = (await this.chain2Client.readContract({
+      address: this.inbox2Address,
+      abi: INBOX_ABI,
+      functionName: "hashBatch",
+      args: [sourceChainId, mined],
+    })) as Hex;
+    const raw = await sign({ hash: digest, privateKey: this.privateKey });
+    const v = raw.yParity === 0 ? 27 : 28;
+    return [sourceChainId, mined, concat([raw.r, raw.s, toHex(v, { size: 1 })])];
   }
 
   async mineFromAToB(from: number, len: number): Promise<number> {
@@ -342,7 +353,7 @@ export class RelayHelper {
         functionName: "batchProcessRequests",
         chain: { ...hardhat, id: this.chain2Id },
         account: this.account,
-        args: [BigInt(this.chain1Id), [request]],
+        args: await this.signMineArgs([request]),
         gas,
       } as any);
       await this.chain2Client.waitForTransactionReceipt({ hash: mineHash });

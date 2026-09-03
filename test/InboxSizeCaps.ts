@@ -4,6 +4,7 @@ import { decodeEventLog, padHex, toHex, size } from "viem";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -51,11 +52,13 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
     await source.write.init([deployer, SOURCE_CHAIN_ID, mpcAbiReEncodeOf(source), feeManagerOf(source)], { account: deployer });
     await source.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await source.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(source, deployer);
 
     const target = await deployTestInbox(viem, { client: { public: publicClient, wallet } });
     await target.write.init([deployer, TARGET_CHAIN_ID, mpcAbiReEncodeOf(target), feeManagerOf(target)], { account: deployer });
     await target.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await target.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(target, deployer);
 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
@@ -185,10 +188,13 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
     mined.targetContract = "0x0000000000000000000000000000000000000000";
     mined.methodCall = (await rejectTools.read.buildMinerRejectMethodCall([1, reason])) as any;
 
-    const mineHash = await target.write.batchProcessRequests([SOURCE_CHAIN_ID, [mined]], {
-      account: deployer,
-      gas: 10_000_000n,
-    });
+    const mineHash = await target.write.batchProcessRequests(
+      await mineArgs(target, SOURCE_CHAIN_ID, [mined]),
+      {
+        account: deployer,
+        gas: 10_000_000n,
+      }
+    );
     const receipt = await publicClient.waitForTransactionReceipt({
       hash: mineHash,
       ...receiptWaitOptions,
@@ -245,10 +251,13 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
     const reason = padHex("0xbeef", { size: 32 });
     mined.methodCall = (await rejectTools.read.buildMinerRejectMethodCall([2, reason])) as any;
 
-    const mineHash = await target.write.batchProcessRequests([SOURCE_CHAIN_ID, [mined]], {
-      account: deployer,
-      gas: 10_000_000n,
-    });
+    const mineHash = await target.write.batchProcessRequests(
+      await mineArgs(target, SOURCE_CHAIN_ID, [mined]),
+      {
+        account: deployer,
+        gas: 10_000_000n,
+      }
+    );
     await publicClient.waitForTransactionReceipt({ hash: mineHash, ...receiptWaitOptions });
 
     const err = (await target.read.errors([mined.requestId])) as any;
@@ -275,10 +284,13 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
 
     await assert.rejects(
       () =>
-        target.write.batchProcessRequests([SOURCE_CHAIN_ID, [mined]], {
-          account: deployer,
-          gas: 10_000_000n,
-        }),
+        target.write.batchProcessRequests(
+          await mineArgs(target, SOURCE_CHAIN_ID, [mined]),
+          {
+            account: deployer,
+            gas: 10_000_000n,
+          }
+        ),
       /InvalidTargetContract/
     );
   });
@@ -296,10 +308,13 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
 
     await assert.rejects(
       () =>
-        target.write.batchProcessRequests([SOURCE_CHAIN_ID, [mined]], {
-          account: deployer,
-          gas: 10_000_000n,
-        }),
+        target.write.batchProcessRequests(
+          await mineArgs(target, SOURCE_CHAIN_ID, [mined]),
+          {
+            account: deployer,
+            gas: 10_000_000n,
+          }
+        ),
       /MethodCallTooLarge/
     );
     assert.equal(
@@ -316,10 +331,13 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
     );
     await publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });
     const reqs = (await source.read.getRequests([TARGET_CHAIN_ID, 0n, 1n])) as any[];
-    await target.write.batchProcessRequests([SOURCE_CHAIN_ID, reqs.map(toMined)], {
-      account: deployer,
-      gas: 10_000_000n,
-    });
+    await target.write.batchProcessRequests(
+      await mineArgs(target, SOURCE_CHAIN_ID, reqs.map(toMined)),
+      {
+        account: deployer,
+        gas: 10_000_000n,
+      }
+    );
     const incoming = (await target.read.getIncomingRequest([reqs[0].requestId])) as any;
     assert.equal(incoming.executed, true);
     assert.equal(incoming.methodCall.data, "0x1234");

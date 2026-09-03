@@ -2,7 +2,44 @@
  * Shared ABI encode/decode and split/combine helpers for 128-bit and 256-bit MPC types.
  * Used by mpc-abi-codec-128.ts, mpc-abi-codec-256.ts, and system test utils.
  */
-import { decodeAbiParameters, encodeAbiParameters } from "viem";
+import { decodeAbiParameters, encodeAbiParameters, keccak256, encodePacked, concat, toHex, type Hex, type Address } from "viem";
+import { sign } from "viem/accounts";
+
+export const HARDHAT_ACCOUNT0_PK =
+  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
+export const HARDHAT_ACCOUNT0_ADDRESS =
+  "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as const;
+
+export async function signUserBinding(
+  digest: Hex,
+  privateKey: `0x${string}` = HARDHAT_ACCOUNT0_PK
+): Promise<Hex> {
+  const raw = await sign({ hash: digest, privateKey });
+  const v = raw.yParity === 0 ? 27 : 28;
+  return concat([raw.r, raw.s, toHex(v, { size: 1 })]);
+}
+
+export async function itTypesUserSignature(params: {
+  values: readonly bigint[];
+  stringCts: readonly bigint[];
+  user: Address;
+  privateKey?: `0x${string}`;
+}): Promise<Hex> {
+  const { values, stringCts, user, privateKey = HARDHAT_ACCOUNT0_PK } = params;
+  const types: ("uint256" | "address")[] = [];
+  const args: (bigint | Address)[] = [];
+  for (let i = 0; i < 8; i++) {
+    types.push("uint256");
+    args.push(values[i]);
+  }
+  for (const cell of stringCts) {
+    types.push("uint256");
+    args.push(cell);
+  }
+  types.push("address");
+  args.push(user);
+  return signUserBinding(keccak256(encodePacked(types, args)), privateKey);
+}
 
 // --- 128-bit helpers ---
 

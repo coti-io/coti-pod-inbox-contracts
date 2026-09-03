@@ -4,6 +4,7 @@ import { encodeAbiParameters, decodeEventLog, keccak256, toHex } from "viem";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -138,6 +139,7 @@ describe("Inbox compact message events", { concurrency: false, timeout: 600_000 
     await target.write.init([deployer, TARGET_CHAIN_ID, mpcAbiReEncodeOf(target), feeManagerOf(target)], { account: deployer });
     await target.write.updateMinFeeConfigs([{ ...CONSTANT_FEE }, { ...CONSTANT_FEE }], { account: deployer });
     await target.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(target, deployer);
 
     const methodCall = {
       selector: "0x00000000" as `0x${string}`,
@@ -156,9 +158,7 @@ describe("Inbox compact message events", { concurrency: false, timeout: 600_000 
     const request = outbound[0];
 
     const mineHash = await target.write.batchProcessRequests(
-      [
-        SOURCE_CHAIN_ID,
-        [
+      await mineArgs(target, SOURCE_CHAIN_ID, [
           {
             requestId: request.requestId,
             sourceContract: request.originalSender,
@@ -171,8 +171,7 @@ describe("Inbox compact message events", { concurrency: false, timeout: 600_000 
             targetFee: request.targetFee,
             callerFee: request.callerFee,
           },
-        ],
-      ],
+        ],),
       { account: deployer, gas: 4_000_000n }
     );
     const receipt = await publicClient.waitForTransactionReceipt({ hash: mineHash, ...receiptWaitOptions });

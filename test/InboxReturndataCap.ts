@@ -9,6 +9,7 @@ import {
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -65,6 +66,7 @@ const deployHarness = async (): Promise<Harness> => {
     account: deployer,
   });
   await inbox.write.addMiner([deployer], { account: deployer });
+  await enableInboxAuth(inbox, deployer);
 
   const oracle = await viem.deployContract("PriceOracle", [deployer], {
     client: { public: publicClient, wallet },
@@ -88,9 +90,7 @@ const mineFailing = async (h: Harness, calldata: Hex, targetFee = 5_000_000n): P
   // Coverage instrumentation inflates gas; 15M OOGs and leaves nextNonce desynced
   // if we bump before the send. Only advance after a successful receipt.
   const hash = await h.inbox.write.batchProcessRequests(
-    [
-      SOURCE_CHAIN_ID,
-      [
+      await mineArgs(h.inbox, SOURCE_CHAIN_ID, [
         {
           requestId,
           sourceContract: h.deployer,
@@ -103,8 +103,7 @@ const mineFailing = async (h: Harness, calldata: Hex, targetFee = 5_000_000n): P
           targetFee: targetFee,
           callerFee: 0n,
         },
-      ],
-    ],
+      ],),
     { account: h.deployer, gas: 16_000_000n }
   );
   const receipt = await h.publicClient.waitForTransactionReceipt({
@@ -309,9 +308,7 @@ describe("Inbox POD-02 capped returndata (raw bytes)", {
     const ridOk = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, BigInt(h.nextNonce + 1));
 
     const hash = await h.inbox.write.batchProcessRequests(
-      [
-        SOURCE_CHAIN_ID,
-        [
+      await mineArgs(h.inbox, SOURCE_CHAIN_ID, [
           {
             requestId: ridFail,
             sourceContract: h.deployer,
@@ -336,8 +333,7 @@ describe("Inbox POD-02 capped returndata (raw bytes)", {
             targetFee: 100_000n,
             callerFee: 0n,
           },
-        ],
-      ],
+        ],),
       { account: h.deployer, gas: 16_000_000n }
     );
     const receipt = await h.publicClient.waitForTransactionReceipt({

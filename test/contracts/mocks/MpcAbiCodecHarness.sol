@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import "@coti-io/coti-contracts/contracts/utils/mpc/MpcCore.sol";
 
+import "@coti-io/coti-contracts/contracts/pod/IInbox.sol";
 import "@coti-io/coti-contracts/contracts/pod/mpccodec/MpcAbiCodec.sol";
 import "../../../contracts/MpcAbiReEncode.sol";
 
@@ -94,12 +95,16 @@ contract MpcAbiCodecHarness {
     /// @param values Raw ciphertext components.
     /// @param stringCts Ciphertext words for the string.
     /// @param stringSigs Signatures for the string ciphertext.
+    /// @param user Bound L1 user encoded into the bind trailer on `data`.
+    /// @param userSignature One service signature over packed it* ciphertexts ‖ `user`.
     /// @return calldataBytes The encoded calldata after re-encoding.
     function buildAndReencodeItTypes(
         bytes4 selector,
         uint256[] calldata values,
         uint256[] calldata stringCts,
-        bytes[] calldata stringSigs
+        bytes[] calldata stringSigs,
+        address user,
+        bytes calldata userSignature
     ) external returns (bytes memory) {
         require(values.length == 8, "MpcAbiCodecHarness: invalid values");
 
@@ -125,10 +130,7 @@ contract MpcAbiCodecHarness {
             ctx = ctx.addArgument(itU64);
         }
         {
-            itUint128 memory itU128 = itUint128({
-                ciphertext: ctUint128.wrap(values[5]),
-                signature: ""
-            });
+            itUint128 memory itU128 = itUint128({ciphertext: ctUint128.wrap(values[5]), signature: ""});
             ctx = ctx.addArgument(itU128);
         }
         {
@@ -146,7 +148,17 @@ contract MpcAbiCodecHarness {
             ctx = ctx.addArgument(itS);
         }
         ctx.mpcMethodCall.selector = selector;
-        return codec.reEncodeWithGt(ctx.build());
+        IInbox.MpcMethodCall memory methodCall = ctx.build();
+        require(userSignature.length == 65, "MpcAbiCodecHarness: user sig len");
+        bytes memory sig = userSignature;
+        bytes32 r;
+        bytes32 s;
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+        }
+        methodCall.data = bytes.concat(methodCall.data, abi.encode(user, r, s));
+        return codec.reEncodeWithGt(methodCall);
     }
 
     /// @dev Build an itString from ciphertext parts and signatures.
@@ -170,4 +182,3 @@ contract MpcAbiCodecHarness {
         return itString({ciphertext: ctString({value: values}), signature: sigs});
     }
 }
-

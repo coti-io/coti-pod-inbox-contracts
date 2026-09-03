@@ -40,6 +40,7 @@ contract MpcAbiReEncode {
     event ValidateCiphertextSuccess(uint8 dataType);
 
     /// @notice Re-encode a method call, validating it-* types to gt-* and rebuilding calldata.
+    /// @dev User-bind trailer recovers against `tx.origin` (the miner).
     function reEncodeWithGt(IInbox.MpcMethodCall memory data) external returns (bytes memory) {
         uint argCount = data.datatypes.length;
         require(data.datalens.length == argCount, "MpcAbiReEncode: invalid datalens");
@@ -49,6 +50,7 @@ contract MpcAbiReEncode {
         bool[] memory isDynamic = new bool[](argCount);
         uint[] memory staticWords = new uint[](argCount);
         uint totalTailSize = 0;
+        bytes memory packedCts;
 
         uint cursor = 0;
         for (uint i = 0; i < argCount; i++) {
@@ -63,7 +65,11 @@ contract MpcAbiReEncode {
             require(rawType <= uint64(uint8(type(MpcDataType).max)), "MpcAbiReEncode: bad datatype");
             require(data.datatypes[i] == bytes8(rawType), "MpcAbiReEncode: datatype alias");
             MpcDataType dataType = MpcDataType(uint8(rawType));
-            (bytes memory encodedArg, bool dynamicType, uint words) = _normalizeArg(argData, dataType);
+            (bytes memory encodedArg, bool dynamicType, uint words, bytes memory packedCt) =
+                _normalizeArg(argData, dataType);
+            if (packedCt.length != 0) {
+                packedCts = abi.encodePacked(packedCts, packedCt);
+            }
             processed[i] = encodedArg;
             isDynamic[i] = dynamicType;
             staticWords[i] = words;
@@ -75,7 +81,27 @@ contract MpcAbiReEncode {
                 require(encodedArg.length == words * 32, "MpcAbiReEncode: invalid static arg");
             }
         }
-        require(cursor == encodedArgs.length, "MpcAbiReEncode: trailing data");
+        if (packedCts.length != 0) {
+            require(encodedArgs.length == cursor + 96, "MpcAbiReEncode: user sig");
+            address boundUser;
+            bytes32 r;
+            bytes32 s;
+            assembly {
+                let p := add(add(encodedArgs, 32), cursor)
+                boundUser := mload(p)
+                r := mload(add(p, 32))
+                s := mload(add(p, 64))
+            }
+            require(boundUser != address(0), "MpcAbiReEncode: user mismatch");
+            bytes32 digest = keccak256(abi.encodePacked(packedCts, boundUser));
+            // Trailer is abi.encode(user, r, s) — no v; accept 27 or 28 vs miner (`tx.origin`).
+            require(
+                ecrecover(digest, 27, r, s) == tx.origin || ecrecover(digest, 28, r, s) == tx.origin,
+                "MpcAbiReEncode: user sig"
+            );
+        } else {
+            require(cursor == encodedArgs.length, "MpcAbiReEncode: trailing data");
+        }
 
         uint headSize = 0;
         for (uint i = 0; i < argCount; i++) {
@@ -146,67 +172,77 @@ contract MpcAbiReEncode {
 
     function _normalizeArg(bytes memory argData, MpcDataType dataType)
         private
-        returns (bytes memory encodedArg, bool dynamicType, uint staticWordCount)
+        returns (bytes memory encodedArg, bool dynamicType, uint staticWordCount, bytes memory packedCt)
     {
         if (dataType == MpcDataType.UINT256) {
-            return (argData, false, 1);
+            return (argData, false, 1, "");
         }
         if (dataType == MpcDataType.ADDRESS) {
-            return (argData, false, 1);
+            return (argData, false, 1, "");
         }
         if (dataType == MpcDataType.BYTES32) {
-            return (argData, false, 1);
+            return (argData, false, 1, "");
         }
         if (dataType == MpcDataType.IT_UINT64) {
             itUint64 memory itValue = abi.decode(argData, (itUint64));
+            packedCt = abi.encodePacked(ctUint64.unwrap(itValue.ciphertext));
             emit ValidateCiphertextStart(uint8(dataType), argData.length, keccak256(argData));
             gtUint64 gtValue = MpcCore.validateCiphertext(itValue);
             emit ValidateCiphertextSuccess(uint8(dataType));
-            return (abi.encode(gtUint64.unwrap(gtValue)), false, 1);
+            return (abi.encode(gtUint64.unwrap(gtValue)), false, 1, packedCt);
         }
         if (dataType == MpcDataType.IT_BOOL) {
             itBool memory itValue = abi.decode(argData, (itBool));
+            packedCt = abi.encodePacked(ctBool.unwrap(itValue.ciphertext));
             emit ValidateCiphertextStart(uint8(dataType), argData.length, keccak256(argData));
             gtBool gtValue = MpcCore.validateCiphertext(itValue);
             emit ValidateCiphertextSuccess(uint8(dataType));
-            return (abi.encode(gtBool.unwrap(gtValue)), false, 1);
+            return (abi.encode(gtBool.unwrap(gtValue)), false, 1, packedCt);
         }
         if (dataType == MpcDataType.IT_UINT8) {
             itUint8 memory itValue = abi.decode(argData, (itUint8));
+            packedCt = abi.encodePacked(ctUint8.unwrap(itValue.ciphertext));
             emit ValidateCiphertextStart(uint8(dataType), argData.length, keccak256(argData));
             gtUint8 gtValue = MpcCore.validateCiphertext(itValue);
             emit ValidateCiphertextSuccess(uint8(dataType));
-            return (abi.encode(gtUint8.unwrap(gtValue)), false, 1);
+            return (abi.encode(gtUint8.unwrap(gtValue)), false, 1, packedCt);
         }
         if (dataType == MpcDataType.IT_UINT16) {
             itUint16 memory itValue = abi.decode(argData, (itUint16));
+            packedCt = abi.encodePacked(ctUint16.unwrap(itValue.ciphertext));
             emit ValidateCiphertextStart(uint8(dataType), argData.length, keccak256(argData));
             gtUint16 gtValue = MpcCore.validateCiphertext(itValue);
             emit ValidateCiphertextSuccess(uint8(dataType));
-            return (abi.encode(gtUint16.unwrap(gtValue)), false, 1);
+            return (abi.encode(gtUint16.unwrap(gtValue)), false, 1, packedCt);
         }
         if (dataType == MpcDataType.IT_UINT32) {
             itUint32 memory itValue = abi.decode(argData, (itUint32));
+            packedCt = abi.encodePacked(ctUint32.unwrap(itValue.ciphertext));
             emit ValidateCiphertextStart(uint8(dataType), argData.length, keccak256(argData));
             gtUint32 gtValue = MpcCore.validateCiphertext(itValue);
             emit ValidateCiphertextSuccess(uint8(dataType));
-            return (abi.encode(gtUint32.unwrap(gtValue)), false, 1);
+            return (abi.encode(gtUint32.unwrap(gtValue)), false, 1, packedCt);
         }
         if (dataType == MpcDataType.IT_UINT128) {
             itUint128 memory itValue = abi.decode(argData, (itUint128));
+            packedCt = abi.encodePacked(ctUint128.unwrap(itValue.ciphertext));
             emit ValidateCiphertextStart(uint8(dataType), argData.length, keccak256(argData));
             gtUint128 gtValue = MpcCore.validateCiphertext(itValue);
             emit ValidateCiphertextSuccess(uint8(dataType));
             bytes memory encoded = abi.encode(gtValue);
-            return (encoded, false, encoded.length / 32);
+            return (encoded, false, encoded.length / 32, packedCt);
         }
         if (dataType == MpcDataType.IT_UINT256) {
             itUint256 memory itValue = abi.decode(argData, (itUint256));
+            packedCt = abi.encodePacked(
+                ctUint128.unwrap(itValue.ciphertext.ciphertextHigh),
+                ctUint128.unwrap(itValue.ciphertext.ciphertextLow)
+            );
             emit ValidateCiphertextStart(uint8(dataType), argData.length, keccak256(argData));
             gtUint256 gtValue = MpcCore.validateCiphertext(itValue);
             emit ValidateCiphertextSuccess(uint8(dataType));
             bytes memory encoded = abi.encode(gtValue);
-            return (encoded, false, encoded.length / 32);
+            return (encoded, false, encoded.length / 32, packedCt);
         }
         if (dataType == MpcDataType.IT_STRING) {
             itString memory itValue = abi.decode(argData, (itString));
@@ -214,10 +250,11 @@ contract MpcAbiReEncode {
             require(
                 itValue.ciphertext.value.length == itValue.signature.length, "MpcAbiReEncode: itString len mismatch"
             );
+            packedCt = _itStringPackedCts(itValue);
             emit ValidateCiphertextStart(uint8(dataType), argData.length, keccak256(argData));
             gtString memory gtValue = MpcCore.validateCiphertext(itValue);
             emit ValidateCiphertextSuccess(uint8(dataType));
-            return (abi.encode(gtValue), true, 0);
+            return (abi.encode(gtValue), true, 0, packedCt);
         }
         if (
             dataType == MpcDataType.STRING || dataType == MpcDataType.BYTES || dataType == MpcDataType.UINT256_ARRAY
@@ -225,10 +262,16 @@ contract MpcAbiReEncode {
                 || dataType == MpcDataType.STRING_ARRAY || dataType == MpcDataType.BYTES_ARRAY
         ) {
             _requireWellFormedDynamic(argData, dataType);
-            return (argData, true, 0);
+            return (argData, true, 0, "");
         }
 
         revert("MpcAbiReEncode: unknown type");
+    }
+
+    function _itStringPackedCts(itString memory itValue) private pure returns (bytes memory packed) {
+        for (uint256 i = 0; i < itValue.ciphertext.value.length; i++) {
+            packed = abi.encodePacked(packed, ctUint64.unwrap(itValue.ciphertext.value[i]));
+        }
     }
 
     /// @dev Word-safe copy; trailing partial words use `mstore8` (Shanghai — no `mcopy`).

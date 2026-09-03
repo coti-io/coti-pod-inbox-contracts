@@ -4,6 +4,7 @@ import { decodeErrorResult, encodeFunctionData, toHex } from "viem";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 const SOURCE_CHAIN_ID = 1000n;
 const TARGET_CHAIN_ID = 1001n;
@@ -56,11 +57,13 @@ describe("estimateExecutionGasForMiner and gasPriceMul/Div", {
     await source.write.init([deployer, SOURCE_CHAIN_ID, mpcAbiReEncodeOf(source), feeManagerOf(source)], { account: deployer });
     await source.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await source.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(source, deployer);
 
     const target = await deployTestInbox(viem, { client: { public: publicClient, wallet } });
     await target.write.init([deployer, TARGET_CHAIN_ID, mpcAbiReEncodeOf(target), feeManagerOf(target)], { account: deployer });
     await target.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await target.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(target, deployer);
 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },

@@ -4,6 +4,7 @@ import { decodeEventLog, encodeFunctionData, toFunctionSelector, toHex } from "v
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -54,6 +55,7 @@ describe("return-leg callback success signal", {
     });
     await source.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await source.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(source, deployer);
 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
@@ -103,9 +105,7 @@ describe("return-leg callback success signal", {
   }) => {
     const returnLegId = packRequestId(TARGET_CHAIN_ID, SOURCE_CHAIN_ID, params.nonce);
     const hash = await params.source.write.batchProcessRequests(
-      [
-        TARGET_CHAIN_ID,
-        [
+      await mineArgs(params.source, TARGET_CHAIN_ID, [
           {
             requestId: returnLegId,
             sourceContract: params.deployer,
@@ -118,8 +118,7 @@ describe("return-leg callback success signal", {
             targetFee: 500_000n,
             callerFee: 0n,
           },
-        ],
-      ],
+        ],),
       { account: params.deployer, gas: 8_000_000n }
     );
     const receipt = await params.publicClient.waitForTransactionReceipt({

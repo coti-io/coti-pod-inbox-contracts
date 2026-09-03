@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  concat,
   encodeAbiParameters,
-  encodeFunctionData,
+  encodePacked,
+  keccak256,
   toFunctionSelector,
   toHex,
 } from "viem";
+import { sign } from "viem/accounts";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 const MPC_PRECOMPILE = "0x0000000000000000000000000000000000000064" as const;
@@ -63,6 +67,7 @@ describe("Inbox POD-04 retry encode failure", { concurrency: false, timeout: 600
       account: deployer,
     });
     await inbox.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(inbox, deployer);
 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
@@ -78,7 +83,14 @@ describe("Inbox POD-04 retry encode failure", { concurrency: false, timeout: 600
     });
     await gasTarget.write.setShouldFail([true], { account: deployer });
 
-    // itUint64 = (ciphertext, signature) — mock accepts any signature.
+    // itUint64 + bind trailer. Mock MPC accepts any IT signature; reEncode recovers vs tx.origin (miner).
+    const user = deployer;
+    const ciphertext = 42n;
+    const digest = keccak256(encodePacked(["uint256", "address"], [ciphertext, user]));
+    const hh0 =
+      "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
+    assert.equal(deployer.toLowerCase(), "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266");
+    const raw = await sign({ hash: digest, privateKey: hh0 });
     const itArg = encodeAbiParameters(
       [
         {
@@ -89,23 +101,23 @@ describe("Inbox POD-04 retry encode failure", { concurrency: false, timeout: 600
           ],
         },
       ],
-      [{ ciphertext: 42n, signature: "0x1234" }]
+      [{ ciphertext, signature: "0x1234" }]
     );
-    // Target signature is observe(bytes); after GT re-encode the call will still hit observe with
-    // wrong ABI and revert — enough for ERROR_CODE_EXECUTION_FAILED after a successful encode.
+    const trailer = encodeAbiParameters(
+      [{ type: "address" }, { type: "bytes32" }, { type: "bytes32" }],
+      [user, raw.r, raw.s]
+    );
     const observeSelector = toFunctionSelector("observe(bytes)");
     const methodCall = {
       selector: observeSelector,
-      data: itArg,
+      data: concat([itArg, trailer]),
       datatypes: [IT_UINT64],
       datalens: [toHex(BigInt((itArg.length - 2) / 2), { size: 32 })],
     };
 
     const rid = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 1n);
     const mineHash = await inbox.write.batchProcessRequests(
-      [
-        SOURCE_CHAIN_ID,
-        [
+      await mineArgs(inbox, SOURCE_CHAIN_ID, [
           {
             requestId: rid,
             sourceContract: deployer,
@@ -118,8 +130,7 @@ describe("Inbox POD-04 retry encode failure", { concurrency: false, timeout: 600
             targetFee: 2_000_000n,
             callerFee: 0n,
           },
-        ],
-      ],
+        ])
       { account: deployer, gas: 8_000_000n }
     );
     await publicClient.waitForTransactionReceipt({ hash: mineHash, ...receiptWaitOptions });

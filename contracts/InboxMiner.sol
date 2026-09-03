@@ -30,8 +30,49 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
     }
 
     /// @inheritdoc IInboxMiner
+    function setVerifier(address verifier_) external onlyOwner {
+        verifier = verifier_;
+        emit VerifierUpdated(verifier_);
+    }
+
+    /// @inheritdoc IInboxMiner
+    function hashBatch(uint256 sourceChainId, MinedRequest[] calldata mined) public view returns (bytes32) {
+        return keccak256(abi.encode(block.chainid, address(this), sourceChainId, keccak256(abi.encode(mined))));
+    }
+
+    function _requireVerifierSignature(
+        uint256 sourceChainId,
+        MinedRequest[] memory mined,
+        bytes calldata verifierSignature
+    ) private view {
+        address expected = verifier;
+        if (expected == address(0)) revert VerifierNotSet();
+        if (verifierSignature.length != 65) revert InvalidVerifierSignature();
+        bytes32 digest = keccak256(abi.encode(block.chainid, address(this), sourceChainId, keccak256(abi.encode(mined))));
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            let ptr := verifierSignature.offset
+            r := calldataload(ptr)
+            s := calldataload(add(ptr, 32))
+            v := byte(0, calldataload(add(ptr, 64)))
+        }
+        if (v < 27) {
+            unchecked {
+                v += 27;
+            }
+        }
+        if (ecrecover(digest, v, r, s) != expected) revert InvalidVerifierSignature();
+    }
+
+    /// @inheritdoc IInboxMiner
     /// @dev Reject items require targetContract==0 and MinerRejectLib.parse success; nonzero target never rejects.
-    function batchProcessRequests(uint256 sourceChainId, MinedRequest[] memory mined)
+    function batchProcessRequests(
+        uint256 sourceChainId,
+        MinedRequest[] memory mined,
+        bytes calldata verifierSignature
+    )
         external
         onlyMiner
         nonReentrant
@@ -42,6 +83,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         if (sourceChainId == chainId) {
             revert SourceChainIsThisChain(chainId);
         }
+        _requireVerifierSignature(sourceChainId, mined, verifierSignature);
 
         // Ingest caps invert create-time peer roles: targetFee executes here (local),
         // callerFee funds the return leg on the peer (remote).
@@ -172,12 +214,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         uint8 rejectionCode,
         bytes32 rejectionReason
     ) private {
-        MpcMethodCall memory emptyCall = MpcMethodCall({
-            selector: bytes4(0),
-            data: new bytes(0),
-            datatypes: new bytes8[](0),
-            datalens: new bytes32[](0)
-        });
+        MpcMethodCall memory emptyCall;
 
         incomingRequests[requestId] = Request({
             requestId: requestId,

@@ -68,6 +68,9 @@ contract InboxBase is IInbox, FeeManagerStubBase {
     /// @notice Storage-free re-encode helper; Inbox DELEGATECALLs it (COTI). Zero on non-MPC chains.
     address public mpcAbiReEncode;
 
+    /// @notice CMS batch verifier. {batchProcessRequests} recovers this address from `verifierSignature`.
+    address public verifier;
+
     /// @notice When true, outbound sends and inbound processing revert (circuit breaker).
     bool public messageProcessingPaused;
 
@@ -258,12 +261,8 @@ contract InboxBase is IInbox, FeeManagerStubBase {
         if (!isRaise && incomingRequest.callbackSelector == bytes4(0)) revert NoCallbackHandler();
 
         bytes4 replySelector = isRaise ? incomingRequest.errorSelector : incomingRequest.callbackSelector;
-        MpcMethodCall memory replyMethodCall = MpcMethodCall({
-            selector: bytes4(0),
-            data: abi.encodeWithSelector(replySelector, data),
-            datatypes: new bytes8[](0),
-            datalens: new bytes32[](0)
-        });
+        MpcMethodCall memory replyMethodCall;
+        replyMethodCall.data = abi.encodeWithSelector(replySelector, data);
         _requireReplyMethodCallBounded(replyMethodCall);
 
         address originalSenderContract = incomingRequest.originalSender;
@@ -589,12 +588,8 @@ contract InboxBase is IInbox, FeeManagerStubBase {
             return;
         }
 
-        MpcMethodCall memory errorMethodCall = MpcMethodCall({
-            selector: bytes4(0),
-            data: abi.encodeWithSelector(incomingRequest.errorSelector, payload),
-            datatypes: new bytes8[](0),
-            datalens: new bytes32[](0)
-        });
+        MpcMethodCall memory errorMethodCall;
+        errorMethodCall.data = abi.encodeWithSelector(incomingRequest.errorSelector, payload);
 
         _tagEstimateOutboundReply(true);
         // Attribute to {SYSTEM_SENDER}, not the intended COTI target (do not impersonate the peer).

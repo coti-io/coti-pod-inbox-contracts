@@ -8,6 +8,7 @@ import {
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -47,6 +48,7 @@ describe("Inbox system-error callback", { concurrency: false, timeout: 600_000 }
       account: deployer,
     });
     await source.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(source, deployer);
 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
@@ -65,6 +67,7 @@ describe("Inbox system-error callback", { concurrency: false, timeout: 600_000 }
       account: deployer,
     });
     await target.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(target, deployer);
     await target.write.setPriceOracle([oracle.address], { account: deployer });
 
     // Receiver is called on the *source* inbox (error return leg).
@@ -103,9 +106,7 @@ describe("Inbox system-error callback", { concurrency: false, timeout: 600_000 }
     const request = outbound[0];
 
     const mineHash = await target.write.batchProcessRequests(
-      [
-        SOURCE_CHAIN_ID,
-        [
+      await mineArgs(target, SOURCE_CHAIN_ID, [
           {
             requestId: request.requestId,
             sourceContract: receiver.address,
@@ -118,8 +119,7 @@ describe("Inbox system-error callback", { concurrency: false, timeout: 600_000 }
             targetFee: request.targetFee,
             callerFee: request.callerFee,
           },
-        ],
-      ],
+        ],),
       { account: deployer, gas: 4_000_000n }
     );
     const mineReceipt = await publicClient.waitForTransactionReceipt({
@@ -176,9 +176,7 @@ describe("Inbox system-error callback", { concurrency: false, timeout: 600_000 }
     assert.equal(reply.targetContract.toLowerCase(), receiver.address.toLowerCase());
 
     const replyMineHash = await source.write.batchProcessRequests(
-      [
-        TARGET_CHAIN_ID,
-        [
+      await mineArgs(source, TARGET_CHAIN_ID, [
           {
             requestId: reply.requestId,
             sourceContract: reply.originalSender,
@@ -191,8 +189,7 @@ describe("Inbox system-error callback", { concurrency: false, timeout: 600_000 }
             targetFee: reply.targetFee,
             callerFee: reply.callerFee,
           },
-        ],
-      ],
+        ],),
       { account: deployer, gas: 4_000_000n }
     );
     await publicClient.waitForTransactionReceipt({ hash: replyMineHash, ...receiptWaitOptions });
