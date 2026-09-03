@@ -5,6 +5,7 @@ import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 const SOURCE_CHAIN_ID = 1000n;
 const TARGET_CHAIN_ID = 1001n;
@@ -39,6 +40,7 @@ describe("zero-budget return legs", {
     await target.write.init([deployer, TARGET_CHAIN_ID, mpcAbiReEncodeOf(target), feeManagerOf(target)], { account: deployer });
     await target.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await target.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(target, deployer);
 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
@@ -70,7 +72,8 @@ describe("zero-budget return legs", {
       callerFee: 0n,
     };
 
-    const mineHash = await target.write.batchProcessRequests([SOURCE_CHAIN_ID, [mined]], {
+    const mineHash = await target.write.batchProcessRequests(
+      await mineArgs(target, SOURCE_CHAIN_ID, [mined]), {
       account: deployer,
       gas: 10_000_000n,
     });
@@ -110,6 +113,7 @@ describe("zero-budget return legs", {
     await target.write.init([deployer, TARGET_CHAIN_ID, mpcAbiReEncodeOf(target), feeManagerOf(target)], { account: deployer });
     await target.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await target.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(target, deployer);
 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
@@ -160,7 +164,8 @@ describe("zero-budget return legs", {
       callerFee: 0n,
     };
 
-    const mineHash = await target.write.batchProcessRequests([SOURCE_CHAIN_ID, [mined]], {
+    const mineHash = await target.write.batchProcessRequests(
+      await mineArgs(target, SOURCE_CHAIN_ID, [mined]), {
       account: deployer,
       gas: 10_000_000n,
     });

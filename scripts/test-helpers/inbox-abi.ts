@@ -152,8 +152,43 @@ export const INBOX_ABI = [
           { name: "callerFee", type: "uint256" },
         ],
       },
+      { name: "verifierSignature", type: "bytes" },
     ],
     outputs: [],
+  },
+  {
+    type: "function",
+    name: "hashBatch",
+    stateMutability: "view",
+    inputs: [
+      { name: "sourceChainId", type: "uint256" },
+      {
+        name: "mined",
+        type: "tuple[]",
+        components: [
+          { name: "requestId", type: "bytes32" },
+          { name: "sourceContract", type: "address" },
+          { name: "targetContract", type: "address" },
+          {
+            name: "methodCall",
+            type: "tuple",
+            components: [
+              { name: "selector", type: "bytes4" },
+              { name: "data", type: "bytes" },
+              { name: "datatypes", type: "bytes8[]" },
+              { name: "datalens", type: "bytes32[]" },
+            ],
+          },
+          { name: "callbackSelector", type: "bytes4" },
+          { name: "errorSelector", type: "bytes4" },
+          { name: "isTwoWay", type: "bool" },
+          { name: "sourceRequestId", type: "bytes32" },
+          { name: "targetFee", type: "uint256" },
+          { name: "callerFee", type: "uint256" },
+        ],
+      },
+    ],
+    outputs: [{ name: "", type: "bytes32" }],
   },
 ] as const;
 

@@ -5,6 +5,7 @@ import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -43,6 +44,7 @@ describe("maxMessageLife terminalization", {
     assert.equal(BigInt(await inbox.read.maxMessageLife()), 172_800n);
     await inbox.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await inbox.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(inbox, deployer);
     await inbox.write.setMaxMessageLife([Number(MESSAGE_LIFE_SECONDS)], { account: deployer });
 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
@@ -92,9 +94,7 @@ describe("maxMessageLife terminalization", {
       datalens: [] as `0x${string}`[],
     };
     const hash = await inbox.write.batchProcessRequests(
-      [
-        SOURCE_CHAIN_ID,
-        [
+      await mineArgs(inbox, SOURCE_CHAIN_ID, [
           {
             requestId,
             sourceContract: deployer,
@@ -107,8 +107,7 @@ describe("maxMessageLife terminalization", {
             targetFee: 1_000_000n,
             callerFee,
           },
-        ],
-      ],
+        ],),
       { account: deployer, gas: 4_000_000n }
     );
     await publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });

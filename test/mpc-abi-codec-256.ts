@@ -11,6 +11,8 @@ import {
   decodeCtUint256FromBytes,
   encodeCtUint256,
   encodeItUint256,
+  itTypesUserSignature,
+  HARDHAT_ACCOUNT0_ADDRESS,
 } from "./mpc-codec-helpers.js";
 
 const MPC_PRECOMPILE = "0x0000000000000000000000000000000000000064";
@@ -129,7 +131,11 @@ describe("MpcAbiCodec256 - Contract integration", async function () {
       functionName,
       args,
     });
-    const result = await publicClient.call({ to: harness.address, data });
+    const result = await publicClient.call({
+      to: harness.address,
+      data,
+      account: wallet.account,
+    });
     const [callData] = decodeAbiParameters([{ type: "bytes" }], result.data ?? "0x");
     return callData;
   };
@@ -155,11 +161,17 @@ describe("MpcAbiCodec256 - Contract integration", async function () {
       args: [2n, 3n, 4n, 5n, 6n, 7n, expectedGt256, { value: [13n, 14n] }],
     });
     const selector = expectedData.slice(0, 10) as `0x${string}`;
+    const values = [1n, 2n, 3n, 4n, 5n, 6n, 100n, 200n] as const;
+    const stringCts = [12n, 13n] as const;
+    const user = HARDHAT_ACCOUNT0_ADDRESS;
+    const userSignature = await itTypesUserSignature({ values, stringCts, user });
     const callData = await buildCall("buildAndReencodeItTypes", [
       selector,
-      [1n, 2n, 3n, 4n, 5n, 6n, 100n, 200n],
-      [12n, 13n],
+      [...values],
+      [...stringCts],
       ["0x01", "0x02"],
+      user,
+      userSignature,
     ]);
 
     assert.equal(callData, expectedData);

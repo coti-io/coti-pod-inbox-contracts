@@ -5,6 +5,7 @@ import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -46,6 +47,7 @@ describe("encode-failure returndata cap", {
     );
     await inbox.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await inbox.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(inbox, deployer);
 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
@@ -66,23 +68,20 @@ describe("encode-failure returndata cap", {
     };
 
     const hash = await inbox.write.batchProcessRequests(
-      [
-        SOURCE_CHAIN_ID,
-        [
-          {
-            requestId,
-            sourceContract: deployer,
-            targetContract: deployer,
-            methodCall,
-            callbackSelector: "0x11111111",
-            errorSelector: "0x22222222",
-            isTwoWay: true,
-            sourceRequestId: "0x" + "00".repeat(32),
-            targetFee: 1_000_000n,
-            callerFee: 1_000_000n,
-          },
-        ],
-      ],
+      await mineArgs(inbox, SOURCE_CHAIN_ID, [
+        {
+          requestId,
+          sourceContract: deployer,
+          targetContract: deployer,
+          methodCall,
+          callbackSelector: "0x11111111",
+          errorSelector: "0x22222222",
+          isTwoWay: true,
+          sourceRequestId: "0x" + "00".repeat(32),
+          targetFee: 1_000_000n,
+          callerFee: 1_000_000n,
+        },
+      ]),
       { account: deployer, gas: 4_000_000n }
     );
     await publicClient.waitForTransactionReceipt({ hash, ...receiptWaitOptions });

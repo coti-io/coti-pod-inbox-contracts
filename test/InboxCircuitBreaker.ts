@@ -3,6 +3,7 @@ import { before, describe, it } from "node:test";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 describe("Inbox circuit breaker and oracle guards", { concurrency: 1 }, async function () {
   const { viem } = await network.connect({ network: "hardhat" });
@@ -18,12 +19,15 @@ describe("Inbox circuit breaker and oracle guards", { concurrency: 1 }, async fu
     });
     await inbox.write.init([deployer, 0n, mpcAbiReEncodeOf(inbox), feeManagerOf(inbox)], { account: deployer });
     await inbox.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(inbox, deployer);
   });
 
   it("batchProcessRequests reverts while message processing is paused", async function () {
     await inbox.write.setMessageProcessingPaused([true], { account: deployer });
     await assert.rejects(
-      inbox.write.batchProcessRequests([11155111n, []], { account: deployer }),
+      inbox.write.batchProcessRequests(await mineArgs(inbox, 11155111n, []), {
+        account: deployer,
+      }),
       /MessageProcessingPaused/
     );
     await inbox.write.setMessageProcessingPaused([false], { account: deployer });
