@@ -155,6 +155,9 @@ contract FeeManager {
 
     /// @notice Validate two-way payment and compute gas budgets for target and callback legs.
     /// @dev `payable` so DELEGATECALL from value-bearing send paths is not rejected by callvalue checks.
+    ///      Callback floor is size-independent (`expectedMinFee(0, localMin)`). The quote prices the
+    ///      callback leg from `callBackMethodCallSize`, which `sendTwoWayMessage` never receives;
+    ///      applying outbound `dataSize` to this check rejects an exact two-size quote.
     function validateAndPrepareTwoWayFees(uint256 dataSize, uint256 totalFeeLocalWei, uint256 callbackFeeLocalWei)
         external
         payable
@@ -180,7 +183,9 @@ contract FeeManager {
         targetGasRemoteUnits =
             _applyGasPriceSkew(Math.mulDiv(remoteGasWei / gasPrice, localPrice, remotePrice), remoteMin);
 
-        if (callerGasLocalUnits < expectedMinFee(dataSize, localMin)) {
+        // Size 0: same template terms the quote uses at callBackMethodCallSize==0 (constantFee, or
+        // callbackExecutionGas + errorLength * gasPerByte, buffered). Not outbound payload size.
+        if (callerGasLocalUnits < expectedMinFee(0, localMin)) {
             revert CallbackFeeTooLow(callerGasLocalUnits);
         }
 
