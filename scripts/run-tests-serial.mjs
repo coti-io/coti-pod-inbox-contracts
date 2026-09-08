@@ -19,6 +19,7 @@ const inboxFiles = readdirSync(path.join(repo, "test"))
 
 const rest = [
   "test/FeeManagerModule.ts",
+  "test/FeeTwoWayCallbackSize.ts",
   "test/FeeTemplateConstantFee.ts",
   "test/MpcAbiReEncodeGuards.ts",
   "test/PoDPriceOracle.ts",
