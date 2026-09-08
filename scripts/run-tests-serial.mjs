@@ -21,6 +21,7 @@ const rest = [
   "test/FeeManagerModule.ts",
   "test/FeeTemplateConstantFee.ts",
   "test/MpcAbiReEncodeGuards.ts",
+  "test/MpcAbiReEncodeUserBind.ts",
   "test/PoDPriceOracle.ts",
   "test/Gt64GasRepro.ts",
   "test/inbox-raise.ts",
