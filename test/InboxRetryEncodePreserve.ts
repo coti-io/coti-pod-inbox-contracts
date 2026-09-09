@@ -6,6 +6,7 @@ import {
   toFunctionSelector,
   toHex,
 } from "viem";
+import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
@@ -32,10 +33,6 @@ const CONSTANT_FEE = {
 /** MpcAbiCodec.MpcDataType.IT_UINT64 */
 const IT_UINT64 = "0x000000000000000e" as `0x${string}`;
 
-const packRequestId = (source: bigint, target: bigint, nonce: bigint): `0x${string}` => {
-  const packed = (source << 192n) | (target << 128n) | nonce;
-  return toHex(packed, { size: 32 });
-};
 
 describe("Inbox POD-04 retry encode failure", { concurrency: false, timeout: 600_000 }, () => {
   it("retry encode failure reverts and preserves ERROR_CODE_EXECUTION_FAILED", async () => {

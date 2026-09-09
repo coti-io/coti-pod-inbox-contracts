@@ -84,6 +84,7 @@ abstract contract InboxEstimateGas is InboxBase {
         }
 
         bytes32 requestId = mined.requestId;
+        _requireRequestIdVersion(requestId);
         (uint256 minedChainId, uint256 minedTargetChainId,) = _unpackRequestId(requestId);
         if (minedChainId != sourceChainId) {
             revert IInboxMiner.RequestSourceChainMismatch(requestId, sourceChainId, minedChainId);

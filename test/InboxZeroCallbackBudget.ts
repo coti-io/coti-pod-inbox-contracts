@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { decodeEventLog, toHex } from "viem";
+import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
@@ -55,7 +56,7 @@ describe("zero-budget return legs", {
       datatypes: ["0x0000000000000001" as `0x${string}`],
       datalens: [] as `0x${string}`[],
     };
-    const requestId = toHex((SOURCE_CHAIN_ID << 192n) | (TARGET_CHAIN_ID << 128n) | 1n, { size: 32 });
+    const requestId = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 1n);
     const mined = {
       requestId,
       sourceContract: deployer,
@@ -140,7 +141,7 @@ describe("zero-budget return legs", {
       args: ["0x"],
     });
 
-    const requestId = toHex((SOURCE_CHAIN_ID << 192n) | (TARGET_CHAIN_ID << 128n) | 1n, { size: 32 });
+    const requestId = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 1n);
     const mined = {
       requestId,
       sourceContract: deployer,

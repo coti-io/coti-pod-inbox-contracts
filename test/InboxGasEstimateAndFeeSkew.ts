@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { decodeErrorResult, encodeFunctionData, toHex } from "viem";
+import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
@@ -81,9 +82,7 @@ describe("estimateExecutionGasForMiner and gasPriceMul/Div", {
     return { ...env, source, target, estTarget };
   };
 
-  const packRequestId = (source: bigint, dest: bigint, nonce: bigint): `0x${string}` =>
-    toHex((source << 192n) | (dest << 128n) | nonce, { size: 32 });
-
+  
   const parseEstimate = (e: any) => {
     const raw = e?.data ?? e?.cause?.data ?? e?.walk?.()?.data;
     const data = typeof raw === "string" ? raw : raw?.data;
