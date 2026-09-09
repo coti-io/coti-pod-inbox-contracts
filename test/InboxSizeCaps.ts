@@ -109,6 +109,17 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
     );
   });
 
+  it("rejects updateMinFeeConfigs when maxExecutionGas equals constantFee", async () => {
+    const { viem, publicClient, wallet, deployer } = await connect();
+    const inbox = await deployTestInbox(viem, { client: { public: publicClient, wallet } });
+    await inbox.write.init([deployer, SOURCE_CHAIN_ID, mpcAbiReEncodeOf(inbox), feeManagerOf(inbox)], { account: deployer });
+    const bad = { ...FEE, constantFee: 5_000_000n, maxExecutionGas: 5_000_000n };
+    await assert.rejects(
+      () => inbox.write.updateMinFeeConfigs([{ ...bad }, { ...FEE }], { account: deployer }),
+      /FeeConfigInvalid/
+    );
+  });
+
   it("rejects updateMinFeeConfigs when maxExecutionGas exceeds protocol ceiling", async () => {
     const { viem, publicClient, wallet, deployer } = await connect();
     const inbox = await deployTestInbox(viem, { client: { public: publicClient, wallet } });

@@ -513,5 +513,44 @@ describe(
         assert.equal(req.callerFee, minLocalGasForHint + EXEC_GAS);
       }
     );
+
+    it(
+      "callback floor ignores outbound payload size (large request, ack-sized callback payment)",
+      { timeout: 300_000 },
+      async () => {
+        const { inbox, deployer, publicClient } = await deployInboxAndOracle({
+          localUsd18: PRICE_SCALE_18,
+          remoteUsd18: PRICE_SCALE_18,
+        });
+        await inbox.write.updateMinFeeConfigs([{ ...LOCAL_TEMPLATE }, { ...remoteConstantOnly }], {
+          account: deployer,
+        });
+
+        const largeData = (`0x${"ab".repeat(800)}`) as `0x${string}`;
+        const methodCall = {
+          selector: "0x00000000" as `0x${string}`,
+          data: largeData,
+          datatypes: [] as `0x${string}`[],
+          datalens: [] as `0x${string}`[],
+        };
+        const outboundSize = mpcMethodCallAbiEncodedLength(methodCall);
+        const outboundFloor = expectedTemplateMinGasUnits(outboundSize, LOCAL_TEMPLATE);
+        const callbackFloor = expectedTemplateMinGasUnits(0n, LOCAL_TEMPLATE);
+        assert.ok(outboundFloor > callbackFloor, "large outbound must raise the old shared floor");
+
+        const callbackWei = (callbackFloor + 100n) * TX_GAS_PRICE_WEI;
+        const totalWei = callbackWei + REMOTE_MIN_GAS_UNITS * TX_GAS_PRICE_WEI;
+
+        const txHash = await inbox.write.sendTwoWayMessage(
+          [888n, deployer, methodCall, "0xdeadbeef", "0xcafebabe", callbackWei],
+          { account: deployer, value: totalWei, gasPrice: TX_GAS_PRICE_WEI }
+        );
+        await publicClient.waitForTransactionReceipt({ hash: txHash, ...receiptWaitOptions });
+        const batch = await inbox.read.getRequests([888n, 0n, 1n]);
+        const req = await getRequestParsed(inbox, batch[0].requestId as `0x${string}`);
+        assert.ok(req.callerFee >= callbackFloor);
+        assert.ok(req.targetFee >= REMOTE_MIN_GAS_UNITS);
+      }
+    );
   }
 );

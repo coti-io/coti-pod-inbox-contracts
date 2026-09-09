@@ -60,6 +60,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         for (uint256 i = 0; i < mined.length;) {
             MinedRequest memory minedRequest = mined[i];
             bytes32 requestId = minedRequest.requestId;
+            _requireRequestIdVersion(requestId);
             (uint256 minedChainId, uint256 minedTargetChainId, uint256 minedNonce) = _unpackRequestId(requestId);
             if (minedChainId != sourceChainId) {
                 revert RequestSourceChainMismatch(requestId, sourceChainId, minedChainId);
@@ -271,12 +272,13 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
     }
 
     /// @inheritdoc IInboxMiner
-    /// @dev Body in {InboxEstimateGas._estimateExecutionGasForMiner}.
+    /// @dev Restricted to the miner set — the estimate runs real target code and must not be a
+    ///      permissionless probe surface. Body in {InboxEstimateGas._estimateExecutionGasForMiner}.
     function estimateExecutionGasForMiner(
         uint256 sourceChainId,
         MinedRequest calldata mined,
         uint256 maxUserGas
-    ) external override {
+    ) external override onlyMiner {
         _estimateExecutionGasForMiner(sourceChainId, mined, maxUserGas);
     }
 
@@ -285,13 +287,13 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         super.collectFees(to);
     }
 
-    /// @dev Permissionless recovery: anyone may retry an execution-failed request. The retrier pays
-    ///      destination gas; the call uses `gasleft()` rather than the prepaid `targetFee` so a
-    ///      under-budget first mine can still recover. dApps must treat delivery timing as adversarial
+    /// @dev Miner-only recovery for an execution-failed request. The miner pays destination gas;
+    ///      the call uses `gasleft()` rather than the prepaid `targetFee` so an under-budget first
+    ///      mine can still recover. dApps must treat delivery timing as adversarial
     ///      (`targetFee` is miner best-effort for the initial mine only).
     ///      If {maxMessageLife} has elapsed since dest ingest, terminalizes instead (system-error return when funded).
     /// @param requestId The ID of the incoming request to retry.
-    function retryFailedRequest(bytes32 requestId) external nonReentrant {
+    function retryFailedRequest(bytes32 requestId) external nonReentrant onlyMiner {
         if (messageProcessingPaused) {
             revert MessageProcessingPaused();
         }

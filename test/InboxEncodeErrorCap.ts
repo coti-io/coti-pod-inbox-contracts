@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { toHex } from "viem";
+import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, feeManagerOf } from "../scripts/deploy-test-inbox.js";
@@ -24,10 +25,6 @@ const FEE = {
   gasPriceDiv: 1n,
 } as const;
 
-const packRequestId = (source: bigint, target: bigint, nonce: bigint): `0x${string}` => {
-  const packed = (source << 192n) | (target << 128n) | nonce;
-  return toHex(packed, { size: 32 });
-};
 
 describe("encode-failure returndata cap", {
   concurrency: false,
