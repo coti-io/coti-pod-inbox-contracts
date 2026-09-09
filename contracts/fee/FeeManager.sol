@@ -180,7 +180,8 @@ contract FeeManager {
         targetGasRemoteUnits =
             _applyGasPriceSkew(Math.mulDiv(remoteGasWei / gasPrice, localPrice, remotePrice), remoteMin);
 
-        if (callerGasLocalUnits < expectedMinFee(dataSize, localMin)) {
+        // Return-leg floor ignores outbound payload bytes (those apply only to the forward leg).
+        if (callerGasLocalUnits < expectedMinFee(0, localMin)) {
             revert CallbackFeeTooLow(callerGasLocalUnits);
         }
 
