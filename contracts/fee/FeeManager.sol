@@ -74,6 +74,9 @@ contract FeeManager {
         if ($.minGasPriceWei == 0) {
             $.minGasPriceWei = DEFAULT_GAS_PRICE;
         }
+        // maxGasPriceWei stays 0 (ceiling disabled). A non-zero cap below a real basefee
+        // spike would under-collect: gas price is a divisor, so a stale-low ceiling converts
+        // prepaid wei into more remote gas than the miner can pay. Never under-collect.
     }
 
     /// @notice Send the contract's entire native balance to `to`.
