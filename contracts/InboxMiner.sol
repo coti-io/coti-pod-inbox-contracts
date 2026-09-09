@@ -60,6 +60,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         for (uint256 i = 0; i < mined.length;) {
             MinedRequest memory minedRequest = mined[i];
             bytes32 requestId = minedRequest.requestId;
+            _requireRequestIdVersion(requestId);
             (uint256 minedChainId, uint256 minedTargetChainId, uint256 minedNonce) = _unpackRequestId(requestId);
             if (minedChainId != sourceChainId) {
                 revert RequestSourceChainMismatch(requestId, sourceChainId, minedChainId);

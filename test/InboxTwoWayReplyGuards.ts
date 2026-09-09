@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { encodeFunctionData, toHex } from "viem";
+import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
@@ -85,9 +86,7 @@ describe("two-way reply guards (respond/raise)", {
     return { ...env, source, target, estTarget };
   };
 
-  const packRequestId = (source: bigint, dest: bigint, nonce: bigint): `0x${string}` =>
-    toHex((source << 192n) | (dest << 128n) | nonce, { size: 32 });
-
+  
   const mineEntry = async (params: {
     target: any;
     estTarget: any;
