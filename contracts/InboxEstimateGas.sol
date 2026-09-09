@@ -70,7 +70,7 @@ abstract contract InboxEstimateGas is InboxBase {
         uint256 maxUserGas
     ) internal virtual returns (uint256 gasUsed);
 
-    /// @dev Always-revert estimate body. Public entry is {InboxMiner.estimateExecutionGasForMiner}.
+    /// @dev Always-revert estimate body. Entry is {InboxMiner.estimateExecutionGasForMiner} (miner-only).
     function _estimateExecutionGasForMiner(
         uint256 sourceChainId,
         IInboxMiner.MinedRequest calldata mined,

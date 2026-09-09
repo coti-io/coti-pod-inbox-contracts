@@ -271,12 +271,13 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
     }
 
     /// @inheritdoc IInboxMiner
-    /// @dev Body in {InboxEstimateGas._estimateExecutionGasForMiner}.
+    /// @dev Restricted to the miner set — the estimate runs real target code and must not be a
+    ///      permissionless probe surface. Body in {InboxEstimateGas._estimateExecutionGasForMiner}.
     function estimateExecutionGasForMiner(
         uint256 sourceChainId,
         MinedRequest calldata mined,
         uint256 maxUserGas
-    ) external override {
+    ) external override onlyMiner {
         _estimateExecutionGasForMiner(sourceChainId, mined, maxUserGas);
     }
 
