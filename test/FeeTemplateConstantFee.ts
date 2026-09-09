@@ -21,9 +21,9 @@ describe("deploy fee template constantFee floor", () => {
     );
   });
 
-  it("COTI-side constant template meets the worst-case floor at protocol ceiling", () => {
-    assert.equal(FEE_CONFIG_COTI_SIDE.constantFee, FEE_CONFIG_COTI_SIDE.maxExecutionGas);
-    assert.equal(FEE_CONFIG_COTI_SIDE.constantFee, PROTOCOL_MAX_EXECUTION_GAS);
+  it("COTI-side constant template meets the worst-case floor with headroom under the ceiling", () => {
+    assert.equal(FEE_CONFIG_COTI_SIDE.maxExecutionGas, PROTOCOL_MAX_EXECUTION_GAS);
+    assert.ok(FEE_CONFIG_COTI_SIDE.constantFee < FEE_CONFIG_COTI_SIDE.maxExecutionGas);
     assert.ok(FEE_CONFIG_COTI_SIDE.constantFee >= constantFeeWorstCaseFloor({ maxMethodCallBytes: DEFAULT_MAX_METHOD_CALL_BYTES }));
     assertConstantFeeCoversWorstCase({ ...FEE_CONFIG_COTI_SIDE });
   });

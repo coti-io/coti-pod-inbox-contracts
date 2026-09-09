@@ -269,7 +269,7 @@ contract FeeManager {
         if (feeConfig.gasPriceMul == 0 || feeConfig.gasPriceDiv == 0) {
             revert FeeConfigInvalid(feeConfig);
         }
-        if (feeConfig.constantFee > 0 && feeConfig.maxExecutionGas < feeConfig.constantFee) {
+        if (feeConfig.constantFee > 0 && feeConfig.maxExecutionGas <= feeConfig.constantFee) {
             revert FeeConfigInvalid(feeConfig);
         }
         if (
