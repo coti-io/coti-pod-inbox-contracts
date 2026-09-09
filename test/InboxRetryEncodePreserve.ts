@@ -149,4 +149,26 @@ describe("Inbox POD-04 retry encode failure", { concurrency: false, timeout: 600
     ];
     assert.equal(errorCodeAfter, 1n, "encode failure must not overwrite execution error code");
   });
+
+  it("rejects retry from a non-miner account", async () => {
+    const { viem } = await network.connect({ network: "hardhat" });
+    const publicClient = await viem.getPublicClient();
+    const [wallet, otherWallet] = await viem.getWalletClients();
+    const deployer = wallet.account.address as `0x${string}`;
+    const other = otherWallet.account.address as `0x${string}`;
+
+    const inbox = await deployTestInbox(viem, {
+      client: { public: publicClient, wallet },
+    });
+    await inbox.write.init([deployer, TARGET_CHAIN_ID, mpcAbiReEncodeOf(inbox), feeManagerOf(inbox)], {
+      account: deployer,
+    });
+    await inbox.write.addMiner([deployer], { account: deployer });
+
+    const rid = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 1n);
+    await assert.rejects(
+      () => inbox.write.retryFailedRequest([rid], { account: other, gas: 1_000_000n }),
+      /NotMiner/
+    );
+  });
 });
