@@ -22,7 +22,7 @@ Reply legs (`respond` / `raise`) use the same weight units via `maxReplyMethodCa
 | Knob | Default |
 |---|---|
 | `FeeConfig.maxMethodCallBytes` | `8192` (protocol ceiling `32_768`) |
-| `FeeConfig.maxExecutionGas` | `5_000_000` (variable) / `25_000_000` shipped constant-fee (`constantFee == ceiling`) |
+| `FeeConfig.maxExecutionGas` | `5_000_000` (variable) / `25_000_000` ceiling with shipped constant-fee below it (`20_000_000`) |
 | `maxReplyMethodCallBytes` | `8192` |
 | `maxMessageLife` | `172_800` (48 hours; `0` = uncapped after explicit owner set) |
 
@@ -43,7 +43,7 @@ Flat `constantFee` is intentional once payload size and execution gas are **hard
 
 1. Take the deploy schedule’s **priced execution** gas units and **measured ingest gas per payload-weight byte**.
 2. Compute `floor = pricedExecution + maxMethodCallBytes × ingestGasPerByte` (optional buffer via `bufferRatioX10000` on the floor helper).
-3. Set `constantFee ≥ floor` and `≤ PROTOCOL_MAX_EXECUTION_GAS`, then set `maxExecutionGas ≥ constantFee` (shipped templates set both to the **25M ceiling**).
+3. Set `constantFee ≥ floor` and `< PROTOCOL_MAX_EXECUTION_GAS`, then set `maxExecutionGas > constantFee` (shipped templates use `constantFee=20M`, `maxExecutionGas=25M`).
 4. Record both values in `deployConfig` / fee templates. Deploy helpers **assert** this inequality and refuse to apply underpriced constant-fee configs.
 
 Subsidy vs margin above the floor is an operator policy choice; shipping below the floor is not.
