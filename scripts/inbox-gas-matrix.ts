@@ -131,21 +131,10 @@ const main = async () => {
 
   const failHash = await target.write.setShouldFail([true], { account: deployer });
   await publicClient.waitForTransactionReceipt({ hash: failHash, ...receiptWaitOptions });
-  const failedRequest = await mined(3n, observeData);
   await record(
     "batchProcessRequests.raw.failure",
     await targetInbox.write.batchProcessRequests(
-      await mineArgs(targetInbox, SOURCE_CHAIN_ID, [failedRequest]), {
-      account: deployer,
-      gas: 4_000_000n,
-    })
-  );
-
-  const passHash = await target.write.setShouldFail([false], { account: deployer });
-  await publicClient.waitForTransactionReceipt({ hash: passHash, ...receiptWaitOptions });
-  await record(
-    "retryFailedRequest.raw.success",
-    await targetInbox.write.retryFailedRequest([failedRequest.requestId], {
+      await mineArgs(targetInbox, SOURCE_CHAIN_ID, [await mined(3n, observeData)]), {
       account: deployer,
       gas: 4_000_000n,
     })

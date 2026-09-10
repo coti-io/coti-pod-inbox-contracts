@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { decodeErrorResult, encodeFunctionData, toHex } from "viem";
+import { decodeErrorResult, decodeEventLog, encodeFunctionData } from "viem";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
+import { packRequestId } from "./packRequestId.js";
 
 const receiptWaitOptions = { timeout: 300_000, pollingInterval: 2_000 };
 
@@ -61,11 +63,6 @@ const ESTIMATE_ERROR_ABI = [
   },
 ] as const;
 
-const packRequestId = (source: bigint, target: bigint, nonce: bigint): `0x${string}` => {
-  const packed = (source << 192n) | (target << 128n) | nonce;
-  return toHex(packed, { size: 32 });
-};
-
 const revertData = (e: any): `0x${string}` | undefined => {
   const raw = e?.data ?? e?.cause?.data ?? e?.walk?.()?.data;
   const data = typeof raw === "string" ? raw : raw?.data;
@@ -94,6 +91,7 @@ describe("inbox prepaid stipend precondition", {
     );
     await inbox.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await inbox.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(inbox, deployer);
 
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
@@ -161,7 +159,7 @@ describe("inbox prepaid stipend precondition", {
     gas: bigint;
   }) => {
     const hash = await params.inbox.write.batchProcessRequests(
-      [SOURCE_CHAIN_ID, [params.mined]],
+      await mineArgs(params.inbox, SOURCE_CHAIN_ID, [params.mined]),
       { account: params.deployer, gas: params.gas }
     );
     const receipt = await params.publicClient.waitForTransactionReceipt({
@@ -170,6 +168,22 @@ describe("inbox prepaid stipend precondition", {
     });
     assert.equal(receipt.status, "success");
     return receipt;
+  };
+
+  const sawSystemError = (receipt: { logs: readonly { address: string; data: `0x${string}`; topics: readonly `0x${string}`[] }[] }, inbox: any, code: bigint) => {
+    let found = false;
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== inbox.address.toLowerCase()) continue;
+      try {
+        const decoded = decodeEventLog({ abi: inbox.abi, data: log.data, topics: log.topics });
+        if (decoded.eventName === "SystemErrorRaised" && decoded.args.errorCode === code) {
+          found = true;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return found;
   };
 
   it("starved mine reverts InsufficientMinerGas; remine with fat gas succeeds", async () => {
@@ -185,9 +199,10 @@ describe("inbox prepaid stipend precondition", {
       targetFee: STARVE_FEE,
     });
 
+    const starvedArgs = await mineArgs(inbox, SOURCE_CHAIN_ID, [mined]);
     await assert.rejects(
       () =>
-        inbox.write.batchProcessRequests([SOURCE_CHAIN_ID, [mined]], {
+        inbox.write.batchProcessRequests(starvedArgs, {
           account: deployer,
           gas: STARVE_GAS,
         }),
@@ -236,9 +251,10 @@ describe("inbox prepaid stipend precondition", {
       data: boom,
       targetFee: STARVE_FEE,
     });
+    const starvedArgs = await mineArgs(inbox, SOURCE_CHAIN_ID, [starved]);
     await assert.rejects(
       () =>
-        inbox.write.batchProcessRequests([SOURCE_CHAIN_ID, [starved]], {
+        inbox.write.batchProcessRequests(starvedArgs, {
           account: deployer,
           gas: STARVE_GAS,
         }),
@@ -269,6 +285,7 @@ describe("inbox prepaid stipend precondition", {
     assert.equal(incoming.executed, true);
     const err = (await inbox.read.errors([deliveredId])) as readonly [`0x${string}`, bigint, `0x${string}`];
     assert.equal(err[1], ERROR_CODE_EXECUTION_FAILED);
+    assert.equal(sawSystemError(receipt, inbox, ERROR_CODE_EXECUTION_FAILED), true);
 
     const nextId = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 2n);
     await mine({
@@ -290,7 +307,7 @@ describe("inbox prepaid stipend precondition", {
     assert.equal(nextErr[1], 0n);
   });
 
-  it("prepaid-delivered OOG commits ErrorReceived; retry succeeds after target recovers", async () => {
+  it("prepaid-delivered OOG commits ErrorReceived and is not remineable", async () => {
     const { inbox, gasTarget, deployer, publicClient } = await setup();
     await gasTarget.write.configure([Mode.BurnUntilOog, 0n, 0n, "0x"], { account: deployer });
 
@@ -302,21 +319,103 @@ describe("inbox prepaid stipend precondition", {
       data: entryCall(),
       targetFee: OOG_FEE,
     });
-    await mine({ inbox, publicClient, deployer, mined, gas: FAT_GAS });
+    const receipt = await mine({ inbox, publicClient, deployer, mined, gas: FAT_GAS });
 
     const incoming = (await inbox.read.getIncomingRequest([requestId])) as any;
     assert.equal(incoming.executed, true);
     const err = (await inbox.read.errors([requestId])) as readonly [`0x${string}`, bigint, `0x${string}`];
     assert.equal(err[1], ERROR_CODE_EXECUTION_FAILED);
+    assert.equal(sawSystemError(receipt, inbox, ERROR_CODE_EXECUTION_FAILED), true);
+    assert.equal(await inbox.read.lastIncomingRequestId([SOURCE_CHAIN_ID]), requestId);
 
+    const remineArgs = await mineArgs(inbox, SOURCE_CHAIN_ID, [mined]);
+    await assert.rejects(
+      () =>
+        inbox.write.batchProcessRequests(remineArgs, {
+          account: deployer,
+          gas: FAT_GAS,
+        }),
+      /NoncesNotContiguous/
+    );
+
+    const nextId = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 2n);
     await gasTarget.write.configure([Mode.EmptySuccess, 0n, 0n, "0x"], { account: deployer });
-    const retryHash = await inbox.write.retryFailedRequest([requestId], {
-      account: deployer,
+    await mine({
+      inbox,
+      publicClient,
+      deployer,
+      mined: minedFor({
+        requestId: nextId,
+        deployer,
+        target: gasTarget.address,
+        data: entryCall(),
+        targetFee: DELIVERED_FEE,
+      }),
       gas: FAT_GAS,
     });
-    await publicClient.waitForTransactionReceipt({ hash: retryHash, ...receiptWaitOptions });
-    const after = (await inbox.read.errors([requestId])) as readonly [`0x${string}`, bigint, `0x${string}`];
-    assert.equal(after[1], 0n);
+    assert.equal(await inbox.read.lastIncomingRequestId([SOURCE_CHAIN_ID]), nextId);
+  });
+
+  it("starved encode-shaped payload reverts InsufficientMinerGas; does not ingest", async () => {
+    const { inbox, gasTarget, deployer } = await setup();
+    const requestId = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 1n);
+    const mined = minedFor({
+      requestId,
+      deployer,
+      target: gasTarget.address,
+      data: entryCall(),
+      targetFee: STARVE_FEE,
+    });
+    mined.methodCall = {
+      selector: "0x00000000" as `0x${string}`,
+      data: "0x",
+      datatypes: ["0x0000000000000001" as `0x${string}`],
+      datalens: [] as `0x${string}`[],
+    };
+    const starvedArgs = await mineArgs(inbox, SOURCE_CHAIN_ID, [mined]);
+    await assert.rejects(
+      () =>
+        inbox.write.batchProcessRequests(starvedArgs, {
+          account: deployer,
+          gas: STARVE_GAS,
+        }),
+      /InsufficientMinerGas/
+    );
+    assert.equal(await incomingRequestId(inbox, requestId), ZERO_ID);
+    assert.equal(await inbox.read.lastIncomingRequestId([SOURCE_CHAIN_ID]), ZERO_ID);
+  });
+
+  it("starved tail reverts the whole batch; prefix is not ingested", async () => {
+    const { inbox, gasTarget, deployer } = await setup();
+    await gasTarget.write.configure([Mode.EmptySuccess, 0n, 0n, "0x"], { account: deployer });
+    const firstId = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 1n);
+    const secondId = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 2n);
+    const first = minedFor({
+      requestId: firstId,
+      deployer,
+      target: gasTarget.address,
+      data: entryCall(),
+      targetFee: DELIVERED_FEE,
+    });
+    const second = minedFor({
+      requestId: secondId,
+      deployer,
+      target: gasTarget.address,
+      data: entryCall(),
+      targetFee: STARVE_FEE,
+    });
+    const args = await mineArgs(inbox, SOURCE_CHAIN_ID, [first, second]);
+    await assert.rejects(
+      () =>
+        inbox.write.batchProcessRequests(args, {
+          account: deployer,
+          gas: 5_500_000n,
+        }),
+      /InsufficientMinerGas/
+    );
+    assert.equal(await incomingRequestId(inbox, firstId), ZERO_ID);
+    assert.equal(await incomingRequestId(inbox, secondId), ZERO_ID);
+    assert.equal(await inbox.read.lastIncomingRequestId([SOURCE_CHAIN_ID]), ZERO_ID);
   });
 
   it("estimateExecutionGasForMiner still reverts ExecutionGasEstimate, not InsufficientMinerGas", async () => {

@@ -24,7 +24,6 @@ Reply legs (`respond` / `raise`) use the same weight units via `maxReplyMethodCa
 | `FeeConfig.maxMethodCallBytes` | `8192` (protocol ceiling `32_768`) |
 | `FeeConfig.maxExecutionGas` | `5_000_000` (variable) / `25_000_000` ceiling with shipped constant-fee below it (`20_000_000`) |
 | `maxReplyMethodCallBytes` | `8192` |
-| `maxMessageLife` | `172_800` (48 hours; `0` = uncapped after explicit owner set) |
 
 Protocol ceilings (all chains, enforced in `FeeManager._requireValidFeeConfig`):
 
@@ -78,10 +77,10 @@ methodCall = rejectTools.buildMinerRejectMethodCall(rejectionCode, rejectionReas
 // mined.targetContract = address(0);
 ```
 
-Keep the real header fields (`requestId`, fees, selectors, `isTwoWay`, …) from the source request / `MessageSent`. Destination stores an **empty** methodCall, emits `RequestRejected`, records `ERROR_CODE_MINER_REJECTED` (3), and for two-way sends a compact system-error callback. `retryFailedRequest` does not apply.
+Keep the real header fields (`requestId`, fees, selectors, `isTwoWay`, …) from the source request / `MessageSent`. Destination stores an **empty** methodCall, emits `RequestRejected`, records `ERROR_CODE_MINER_REJECTED` (3), and for two-way sends a compact system-error callback.
 
 If a normal (non-reject) item is overweight, ingest **reverts** — resubmit that nonce as a reject item (`targetContract=0` + sentinel).
 
 ## Miner policy
 
-Use reject for oversize / structurally unprocessable ingest only — not for execution-gas sizing (use `estimateExecutionGasForMiner`).
+Use reject for oversize / structurally unprocessable ingest, and for a singleton whose prepaid stipend cannot be forwarded (`InsufficientMinerGas` at CMS `max_gas_limit`). Do not use reject for ordinary delivered execution failure — that path is terminal via system-error callback.

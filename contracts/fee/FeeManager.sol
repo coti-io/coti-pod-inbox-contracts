@@ -16,11 +16,6 @@ contract FeeManager {
     /// @notice Default respond/raise payload-weight cap until admin sets {setMaxReplyMethodCallBytes}.
     uint32 public constant DEFAULT_MAX_REPLY_METHOD_CALL_BYTES = 8192;
 
-    /// @notice Default dest-ingest TTL (seconds) until admin sets {setMaxMessageLife} (48 hours).
-    /// @dev `0` after explicit owner set still means uncapped retry; bootstrap only writes this while
-    ///      `maxReplyMethodCallBytes` is still unset (fresh fee storage).
-    uint32 public constant DEFAULT_MAX_MESSAGE_LIFE = 172_800;
-
     /// @notice Protocol ceiling for FeeConfig.maxMethodCallBytes (all chains).
     uint32 public constant PROTOCOL_MAX_METHOD_CALL_BYTES = 32_768;
 
@@ -65,11 +60,6 @@ contract FeeManager {
         LibFeeStorage.Layout storage $ = LibFeeStorage.get();
         if ($.maxReplyMethodCallBytes == 0) {
             $.maxReplyMethodCallBytes = DEFAULT_MAX_REPLY_METHOD_CALL_BYTES;
-            // Fresh fee storage: also apply 48h message life. Do not overwrite later owner
-            // setMaxMessageLife(0) (uncapped) — that path runs when maxReply is already non-zero.
-            if ($.maxMessageLife == 0) {
-                $.maxMessageLife = DEFAULT_MAX_MESSAGE_LIFE;
-            }
         }
         if ($.minGasPriceWei == 0) {
             $.minGasPriceWei = DEFAULT_GAS_PRICE;
@@ -148,12 +138,6 @@ contract FeeManager {
         }
         LibFeeStorage.get().maxReplyMethodCallBytes = maxBytes;
         emit MaxReplyMethodCallBytesUpdated(maxBytes);
-    }
-
-    /// @notice Set max age (seconds) from dest ingest before execution-failed requests terminalize on retry.
-    /// @dev `0` = uncapped. Fresh inboxes default to {DEFAULT_MAX_MESSAGE_LIFE} (48h) via {ensureDefaults}.
-    function setMaxMessageLife(uint32 lifeSeconds) external {
-        LibFeeStorage.get().maxMessageLife = lifeSeconds;
     }
 
     /// @notice Validate two-way payment and compute gas budgets for target and callback legs.

@@ -125,10 +125,6 @@ abstract contract FeeManagerStubBase is ModuleCallBase {
         return v == 0 ? 8192 : v;
     }
 
-    function maxMessageLife() public view returns (uint32) {
-        return LibFeeStorage.get().maxMessageLife;
-    }
-
     function minPriorityFeeWei() public view returns (uint256) {
         return LibFeeStorage.get().minPriorityFeeWei;
     }
@@ -209,10 +205,6 @@ abstract contract FeeManagerStubBase is ModuleCallBase {
 
     function setMaxReplyMethodCallBytes(uint32 maxBytes) public virtual {
         _delegateModule(feeManager, abi.encodeCall(FeeManager.setMaxReplyMethodCallBytes, (maxBytes)));
-    }
-
-    function setMaxMessageLife(uint32 lifeSeconds) public virtual {
-        _delegateModule(feeManager, abi.encodeCall(FeeManager.setMaxMessageLife, (lifeSeconds)));
     }
 
     function collectFees(address payable to) public virtual {

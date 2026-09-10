@@ -18,7 +18,7 @@ Integration tests, deploy orchestration, and the multi-repo dev workspace live i
 | `contracts/Inbox.sol` | Production inbox (miner + access control) |
 | `contracts/InboxBase.sol` | Core send/receive/request storage |
 | `contracts/InboxEstimateGas.sol` | Estimate-mode layer + `_estimateExecutionGasForMiner` |
-| `contracts/InboxMiner.sol` | Batch miner / retry / `estimateExecutionGasForMiner` entry |
+| `contracts/InboxMiner.sol` | Batch miner / `estimateExecutionGasForMiner` entry |
 | `contracts/MpcAbiReEncode.sol` | COTI DELEGATECALL target: it-* → gt-* re-encode |
 | `contracts/fee/` | Fee manager and price oracle **implementations** |
 | `@coti-io/coti-contracts/contracts/pod/...` | Shared interfaces / `MpcAbiCodec` builders / `InboxUser` (npm dep) |

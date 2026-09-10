@@ -97,12 +97,12 @@ contract InboxBase is IInbox, FeeManagerStubBase {
     /// @dev Overridden by {InboxEstimateGas} to accumulate tagged reply payload weight.
     function _accumulateEstimateOutboundIfTagged(uint256) internal virtual {}
 
+    /// @notice Target subcall reverted or OOGd after the prepaid stipend was forwarded.
+    /// @dev Terminal. System-error callback is raised (return leg when `callerFee > 0`).
     uint64 internal constant ERROR_CODE_EXECUTION_FAILED = 1;
     uint64 internal constant ERROR_CODE_ENCODE_FAILED = 2;
     /// @notice Miner rejected an inbound nonce via zero targetContract + special reject {MpcMethodCall} encoding.
     uint64 internal constant ERROR_CODE_MINER_REJECTED = 3;
-    /// @notice Incoming request exceeded {maxMessageLife} while still execution-failed; terminalized on retry.
-    uint64 internal constant ERROR_CODE_EXPIRED = 4;
 
     /// @notice Max bytes retained for execution or encode failure payloads (prefix only).
     /// @dev Unbounded returndata/encode reasons can OOG miner txs and wedge the contiguous nonce queue.
@@ -151,23 +151,19 @@ contract InboxBase is IInbox, FeeManagerStubBase {
 
     /// @notice Linked one-way return/error leg was received for an original outbound request.
     /// @dev Marks the original request `executed`. This means the return leg was ingested—not that the
-    ///      application callback succeeded. Check return-leg `errors` / retries before treating it as final.
-    ///      Prefer {ReturnLegCallbackSucceeded} for first-mine callback success (not emitted on retry recovery;
-    ///      see that event's NatSpec and {RetryFailedRequestSuccess}).
+    ///      application callback succeeded. Check return-leg `errors` before treating it as final.
+    ///      Prefer {ReturnLegCallbackSucceeded} for first-mine callback success.
     event IncomingResponseReceived(bytes32 indexed requestId, bytes32 indexed sourceRequestId);
 
     /// @notice Return-leg target call completed without recording an execution/encode error.
-    /// @dev Emitted after {IncomingResponseReceived} only on the initial mine when the callback/error handler
-    ///      subcall succeeded. Not emitted on a later successful {retryFailedRequest} — that path clears the
-    ///      error and emits {RetryFailedRequestSuccess} instead. Indexers that need recovered return legs must
-    ///      also watch that event (or empty `errors`). {IncomingResponseReceived} consumers are unchanged.
+    /// @dev Emitted after {IncomingResponseReceived} when the callback/error handler subcall succeeded.
     event ReturnLegCallbackSucceeded(bytes32 indexed requestId, bytes32 indexed returnLegRequestId);
 
     /// @notice Request execution or encoding failed.
     event ErrorReceived(bytes32 indexed requestId, uint64 errorCode, bytes errorMessage);
 
-    /// @notice Encode/system failure automatically raised an error callback to the source chain.
-    /// @dev Payload is {ErrorData}; not eligible for {retryFailedRequest}.
+    /// @notice Encode, execution, or miner-reject failure automatically raised an error callback.
+    /// @dev Payload is {ErrorData}. One-way (`callerFee == 0`) is dest-local only.
     event SystemErrorRaised(bytes32 indexed requestId, uint64 errorCode, bytes payload);
 
     /// @notice Emitted after executing an incoming request. Values are gas units (same basis as `Request.targetFee`).
@@ -566,7 +562,7 @@ contract InboxBase is IInbox, FeeManagerStubBase {
         _sendSystemErrorCallbackWithCode(incomingRequest, ERROR_CODE_ENCODE_FAILED, errorMessage);
     }
 
-    /// @dev System-error return leg with an explicit error code (encode failure, miner reject, …).
+    /// @dev System-error return leg with an explicit error code (execution, encode, miner reject).
     ///      When `callerFee` is zero (typical one-way), records a local {SystemErrorRaised} only — no outbound.
     function _sendSystemErrorCallbackWithCode(
         Request storage incomingRequest,

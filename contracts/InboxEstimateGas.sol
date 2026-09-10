@@ -63,7 +63,7 @@ abstract contract InboxEstimateGas is InboxBase {
         _estimateReplyKind = _REPLY_NONE;
     }
 
-    /// @dev Shared mine/estimate/retry path implemented by {InboxMiner}.
+    /// @dev Shared mine/estimate path implemented by {InboxMiner}.
     function _runEstimateIncomingExecution(
         Request storage incomingRequest,
         uint256 sourceChainId,

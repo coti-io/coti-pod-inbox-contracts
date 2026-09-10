@@ -183,7 +183,7 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
     assert.equal(spoofParsed[0], false);
   });
 
-  it("in-batch reject advances cursor without fat storage; retry fails", async () => {
+  it("in-batch reject advances cursor without fat storage", async () => {
     const { source, target, deployer, publicClient, rejectTools } = await deployPair();
 
     const hash = await source.write.sendOneWayMessage(
@@ -241,11 +241,6 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
       }
     }
     assert.equal(sawRejected, true);
-
-    await assert.rejects(
-      () => target.write.retryFailedRequest([mined.requestId], { account: deployer, gas: 5_000_000n }),
-      /RetryFailedRequestNotAFailedRequest/
-    );
   });
 
   it("nonzero target + reject-shaped raw methodCall is not miner reject", async () => {
@@ -293,15 +288,13 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
     mined.targetContract = "0x0000000000000000000000000000000000000000";
     mined.methodCall = minimalMethodCall("0x1234");
 
+    const args = await mineArgs(target, SOURCE_CHAIN_ID, [mined]);
     await assert.rejects(
       () =>
-        target.write.batchProcessRequests(
-          await mineArgs(target, SOURCE_CHAIN_ID, [mined]),
-          {
+        target.write.batchProcessRequests(args, {
             account: deployer,
             gas: 10_000_000n,
-          }
-        ),
+          }),
       /InvalidTargetContract/
     );
   });
@@ -317,15 +310,13 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
     const mined = toMined(reqs[0]);
     mined.methodCall = minimalMethodCall(toHex(new Uint8Array(9000)));
 
+    const args = await mineArgs(target, SOURCE_CHAIN_ID, [mined]);
     await assert.rejects(
       () =>
-        target.write.batchProcessRequests(
-          await mineArgs(target, SOURCE_CHAIN_ID, [mined]),
-          {
+        target.write.batchProcessRequests(args, {
             account: deployer,
             gas: 10_000_000n,
-          }
-        ),
+          }),
       /MethodCallTooLarge/
     );
     assert.equal(

@@ -23,7 +23,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
     uint256 private constant ESTIMATE_OUTER_RESERVE = 150_000;
 
     /// @notice Pause or unpause messaging (owner-only emergency stop).
-    /// @param paused True to halt outbound sends, {batchProcessRequests}, and {retryFailedRequest}.
+    /// @param paused True to halt outbound sends and {batchProcessRequests}.
     function setMessageProcessingPaused(bool paused) external onlyOwner {
         messageProcessingPaused = paused;
         emit MessageProcessingPausedUpdated(paused);
@@ -287,16 +287,9 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         super.setMaxReplyMethodCallBytes(maxBytes);
     }
 
-    /// @notice Set max age (seconds) from dest ingest before execution-failed requests terminalize on retry.
-    /// @param lifeSeconds `0` disables the lifetime check.
-    function setMaxMessageLife(uint32 lifeSeconds) public override onlyOwner {
-        super.setMaxMessageLife(lifeSeconds);
-    }
-
     enum IncomingExecKind {
         Mine,
-        Estimate,
-        Retry
+        Estimate
     }
 
     /// @inheritdoc InboxEstimateGas
@@ -324,42 +317,13 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         super.collectFees(to);
     }
 
-    /// @dev Miner-only recovery for an execution-failed request. The miner pays destination gas;
-    ///      the call uses `gasleft()` rather than the prepaid `targetFee` so a delivered-but-still-failed
-    ///      first mine can recover (app OOG / revert after full stipend). Miner-starved first mines revert
-    ///      {IInboxMiner.InsufficientMinerGas} and never ingest. dApps must treat delivery timing as adversarial
-    ///      (`targetFee` is miner best-effort for the initial mine only).
-    ///      If {maxMessageLife} has elapsed since dest ingest, terminalizes instead (system-error return when funded).
-    /// @param requestId The ID of the incoming request to retry.
-    function retryFailedRequest(bytes32 requestId) external nonReentrant onlyMiner {
-        if (messageProcessingPaused) {
-            revert MessageProcessingPaused();
-        }
-        if (requestId == bytes32(0)) {
-            revert RequestIdRequired();
-        }
-        Request storage incomingRequest = incomingRequests[requestId];
-        (uint256 sourceChainId,,) = _unpackRequestId(requestId);
-        uint256 errorCode = errors[requestId].errorCode;
-        if (!incomingRequest.executed || errorCode != ERROR_CODE_EXECUTION_FAILED) {
-            revert RetryFailedRequestNotAFailedRequest();
-        }
-        uint32 life = maxMessageLife();
-        if (life != 0 && block.timestamp > uint256(incomingRequest.timestamp) + uint256(life)) {
-            errors[requestId].errorCode = ERROR_CODE_EXPIRED;
-            _sendSystemErrorCallbackWithCode(incomingRequest, ERROR_CODE_EXPIRED, "ttl");
-            return;
-        }
-
-        _runIncomingExecution(incomingRequest, sourceChainId, IncomingExecKind.Retry, 0);
-    }
-
     /// @dev Executes one mined request: encode calldata, call target with `gas` from `targetFee`, record errors.
     function _executeIncomingRequest(Request storage incomingRequest, uint256 sourceChainId) internal {
         _runIncomingExecution(incomingRequest, sourceChainId, IncomingExecKind.Mine, 0);
     }
 
-    /// @dev Shared mine / estimate / retry execution path.
+    /// @dev Shared mine / estimate execution path. Delivered execution failure is terminal
+    ///      (`ErrorReceived` + system-error callback). Starved first mines revert {InsufficientMinerGas}.
     function _runIncomingExecution(
         Request storage incomingRequest,
         uint256 sourceChainId,
@@ -376,12 +340,18 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         (bool encodedOk, bytes memory callData, bytes memory encodeErr) =
             _safeEncodeMethodCall(incomingRequest.methodCall);
 
+        // Check after encode: an inner encode OOG returns false here; committing that as
+        // ERROR_CODE_ENCODE_FAILED would ingest a starved mine. Revert the batch instead.
+        uint256 targetGasBudget = _localRequestExecutionBudget(incomingRequest.targetFee);
+        uint256 outerReserve =
+            kind == IncomingExecKind.Estimate ? ESTIMATE_OUTER_RESERVE : POST_CALL_GAS_RESERVE;
+        uint256 gasForCall = _computeUserCallGas(targetGasBudget, outerReserve, maxUserGas);
+
+        if (kind == IncomingExecKind.Mine && gasForCall < targetGasBudget) {
+            revert InsufficientMinerGas(incomingRequest.requestId, gasForCall, targetGasBudget);
+        }
+
         if (!encodedOk) {
-            if (kind == IncomingExecKind.Retry) {
-                // Preserve ERROR_CODE_EXECUTION_FAILED so retry stays eligible.
-                _clearExecutionContext();
-                revert RetryFailedRequestEncodeFailed(_capErrorReturnData(encodeErr));
-            }
             bytes memory cappedEncodeErr = _recordEncodeError(incomingRequest.requestId, encodeErr);
             _sendSystemErrorCallback(incomingRequest, cappedEncodeErr);
             _clearExecutionContext();
@@ -389,42 +359,15 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
             return 0;
         }
 
-        uint256 gasForCall;
-        uint256 targetGasBudget = _localRequestExecutionBudget(incomingRequest.targetFee);
-        if (kind == IncomingExecKind.Retry) {
-            gasForCall = gasleft();
-        } else {
-            uint256 outerReserve =
-                kind == IncomingExecKind.Estimate ? ESTIMATE_OUTER_RESERVE : POST_CALL_GAS_RESERVE;
-            gasForCall = _computeUserCallGas(targetGasBudget, outerReserve, maxUserGas);
-        }
-
-        if (kind == IncomingExecKind.Mine && gasForCall < targetGasBudget) {
-            revert IInboxMiner.InsufficientMinerGas(incomingRequest.requestId, gasForCall, targetGasBudget);
-        }
-
         uint256 gasBeforeSubcall = gasleft();
         (bool success, bytes memory returnData) =
             _callWithCappedReturnData(targetContract, gasForCall, callData);
         gasUsed = gasBeforeSubcall - gasleft();
 
-        if (kind == IncomingExecKind.Retry) {
-            _clearExecutionContext();
-            if (!success) {
-                revert RetryFailedRequestExecutionFailed(returnData);
-            }
-            delete errors[incomingRequest.requestId];
-            emit RetryFailedRequestSuccess(incomingRequest.requestId);
-            return gasUsed;
-        }
-
         uint256 gasRemainingApprox = targetGasBudget > gasUsed ? targetGasBudget - gasUsed : 0;
         if (_shouldEmit()) {
             emit FeeExecutionSettled(incomingRequest.requestId, gasUsed, gasRemainingApprox);
         }
-
-        _clearExecutionContext();
-        incomingRequest.executed = true;
 
         if (!success) {
             bytes32 rid = incomingRequest.requestId;
@@ -436,7 +379,11 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
             if (_shouldEmit()) {
                 emit ErrorReceived(rid, ERROR_CODE_EXECUTION_FAILED, returnData);
             }
+            _sendSystemErrorCallbackWithCode(incomingRequest, ERROR_CODE_EXECUTION_FAILED, returnData);
         }
+
+        _clearExecutionContext();
+        incomingRequest.executed = true;
     }
 
     function _clearExecutionContext() private {

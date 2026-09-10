@@ -29,6 +29,7 @@ library LibFeeStorage {
         FeeConfig localMinFeeConfig;
         FeeConfig remoteMinFeeConfig;
         uint32 maxReplyMethodCallBytes;
+        /// @dev Unused. Was dest-ingest TTL for `retryFailedRequest`. Kept so ERC-7201 layout stays stable.
         uint32 maxMessageLife;
         uint256 minPriorityFeeWei;
         uint256 minGasPriceWei;
