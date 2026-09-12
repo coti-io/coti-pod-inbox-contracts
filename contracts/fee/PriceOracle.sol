@@ -129,31 +129,42 @@ contract PriceOracle is Ownable {
         if (!_fetchIntervalsElapsed()) {
             return;
         }
-        lastFetchTimestamp = block.timestamp;
+        bool anyUpdated;
         uint256 localPrice;
         uint256 remotePrice;
         if (localToken != address(0)) {
-            localPrice = _refreshLeg(localToken);
+            bool updated;
+            (localPrice, updated) = _refreshLeg(localToken);
+            anyUpdated = updated;
         }
         if (remoteToken != address(0)) {
-            remotePrice = _refreshLeg(remoteToken);
+            bool updated;
+            (remotePrice, updated) = _refreshLeg(remoteToken);
+            anyUpdated = anyUpdated || updated;
+        }
+        // Only lock the interval gate when at least one leg stored a fresh non-zero pull.
+        // A blip that returns zero for both legs must not suppress the next refresh attempt.
+        if (anyUpdated) {
+            lastFetchTimestamp = block.timestamp;
         }
         emit CacheRefreshed(localToken, localPrice, remoteToken, remotePrice);
         _afterRefreshCache();
     }
 
     /// @dev Pull live (or subclass) price; write on success, emit failure when pull is zero and cache retained.
-    function _refreshLeg(address token) private returns (uint256 stored) {
+    /// @return stored Cache value after this attempt (new pull or previous).
+    /// @return updated True when a non-zero pull was written.
+    function _refreshLeg(address token) private returns (uint256 stored, bool updated) {
         uint256 previous = cachedPriceUSD[token];
         uint256 pulled = _pullCachedPrice(token);
         if (pulled != 0) {
             cachedPriceUSD[token] = pulled;
             priceUpdatedAt[token] = block.timestamp;
             emit CachedPriceUpdated(token, pulled, block.timestamp);
-            return pulled;
+            return (pulled, true);
         }
         emit CacheRefreshLegFailed(token, previous);
-        return previous;
+        return (previous, false);
     }
 
     /// @notice Cached local and remote inbox leg prices.
