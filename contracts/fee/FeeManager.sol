@@ -289,6 +289,11 @@ contract FeeManager {
         ) {
             revert FeeConfigInvalid(feeConfig);
         }
+        // Variable templates must leave headroom under maxExecutionGas for a zero-byte return-leg floor
+        // (same class of hole as constantFee >= maxExecutionGas).
+        if (feeConfig.constantFee == 0 && expectedMinFee(0, feeConfig) >= feeConfig.maxExecutionGas) {
+            revert FeeConfigInvalid(feeConfig);
+        }
     }
 
     function _applyGasPriceSkew(uint256 gasUnits, LibFeeStorage.FeeConfig memory feeConfig)
