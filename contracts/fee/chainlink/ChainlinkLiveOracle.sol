@@ -10,9 +10,8 @@ import "./ChainlinkPriceReader.sol";
 /// @notice Chainlink Data Feed adapter implementing {IPodPriceOracle}.
 contract ChainlinkLiveOracle is IPodPriceOracle, ILivePriceMetaReader, Ownable {
     /// @notice Max seconds since `updatedAt` before a read is ignored.
-    /// @dev `0` intentionally disables the age check (ops may rely on the upstream feed’s own
-    ///      validity window). Prefer a non-zero value in production unless the feed already
-    ///      encodes expiry.
+    /// @dev `0` skips the max-age bound only; future-dated `updatedAt` is always rejected by
+    ///      {ChainlinkFeedLib}. Prefer a non-zero value in production. {setMaxStaleness}(0) reverts.
     uint256 public maxStaleness;
 
     /// @notice Chainlink aggregator per token address.
@@ -21,13 +20,17 @@ contract ChainlinkLiveOracle is IPodPriceOracle, ILivePriceMetaReader, Ownable {
     event MaxStalenessUpdated(uint256 previous, uint256 current);
     event FeedUpdated(address indexed token, address aggregator);
 
+    /// @notice {setMaxStaleness} was called with zero (disables max-age entirely via setter).
+    error ZeroMaxStaleness();
+
     /// @param initialOwner Admin for feed configuration.
     constructor(address initialOwner, uint256 _maxStaleness) Ownable(initialOwner) {
         maxStaleness = _maxStaleness;
     }
 
-    /// @notice Set max feed staleness.
+    /// @notice Set max feed staleness (`0` not allowed via this setter).
     function setMaxStaleness(uint256 seconds_) external onlyOwner {
+        if (seconds_ == 0) revert ZeroMaxStaleness();
         emit MaxStalenessUpdated(maxStaleness, seconds_);
         maxStaleness = seconds_;
     }
