@@ -113,7 +113,7 @@ describe("Inbox POD-04 retry encode failure", { concurrency: false, timeout: 600
             isTwoWay: false,
             sourceRequestId: toHex(0n, { size: 32 }),
             targetFee: 2_000_000n,
-            callerFee: 0n,
+            callerFee: 200_000n,
           },
         ],
       ],

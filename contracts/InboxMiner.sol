@@ -101,6 +101,12 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
                 if (minedRequest.callerFee > maxRemoteExecutionGas) {
                     revert FeeGasTooHigh(minedRequest.callerFee, maxRemoteExecutionGas);
                 }
+                _requireValidTwoWayIngest(
+                    minedRequest.isTwoWay,
+                    minedRequest.callbackSelector,
+                    minedRequest.errorSelector,
+                    minedRequest.callerFee
+                );
 
                 Request memory newIncomingRequest = Request({
                     requestId: requestId,

@@ -51,6 +51,8 @@ contract InboxBase is IInbox, FeeManagerStubBase {
     error ZeroCallbackBudget();
     /// @notice Two-way send requires distinct non-zero `callbackSelector` and `errorSelector`.
     error InvalidTwoWaySelectors();
+    /// @notice Ingested two-way request must carry a non-zero prepaid callback gas budget.
+    error InvalidTwoWayCallerFee();
     error ErrorNotFound();
     error ResponseNotFound();
     error CannotSendToSameChain();
@@ -477,6 +479,24 @@ contract InboxBase is IInbox, FeeManagerStubBase {
             callerFeeGas,
             requestSender
         );
+    }
+
+    /// @dev Mirror send-path two-way invariants at dest ingest / estimate (miner-supplied fields).
+    function _requireValidTwoWayIngest(
+        bool isTwoWay,
+        bytes4 callbackSelector,
+        bytes4 errorSelector,
+        uint256 callerFee
+    ) internal pure {
+        if (!isTwoWay) {
+            return;
+        }
+        if (callbackSelector == bytes4(0) || errorSelector == bytes4(0) || callbackSelector == errorSelector) {
+            revert InvalidTwoWaySelectors();
+        }
+        if (callerFee == 0) {
+            revert InvalidTwoWayCallerFee();
+        }
     }
 
     /// @dev Creates and stores a request and emits {MessageSent}.

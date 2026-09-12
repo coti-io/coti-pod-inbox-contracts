@@ -100,7 +100,7 @@ describe("zero-budget return legs", {
     assert.ok(sawLocal, "expected local SystemErrorRaised without outbound");
   });
 
-  it("two-way respond with forged callerFee=0 reverts ZeroCallbackBudget", async () => {
+  it("rejects two-way ingest with zero callerFee", async () => {
     const { viem } = await network.connect({ network: "hardhat" });
     const publicClient = await viem.getPublicClient();
     const [wallet] = await viem.getWalletClients();
@@ -121,34 +121,14 @@ describe("zero-budget return legs", {
     await target.write.setPriceOracle([oracle.address], { account: deployer });
     await target.write.setGasPriceBounds([0n, GAS_PRICE_WEI, GAS_PRICE_WEI], { account: deployer });
 
-    const estTarget = await viem.deployContract("EstimateGasTarget", [target.address], {
-      client: { public: publicClient, wallet },
-    });
-    await estTarget.write.configure([0n, true, false, "0xab"], { account: deployer });
-
-    const { encodeFunctionData } = await import("viem");
-    const entryCall = encodeFunctionData({
-      abi: [
-        {
-          type: "function",
-          name: "entry",
-          inputs: [{ name: "data", type: "bytes" }],
-          outputs: [],
-          stateMutability: "nonpayable",
-        },
-      ],
-      functionName: "entry",
-      args: ["0x"],
-    });
-
     const requestId = packRequestId(SOURCE_CHAIN_ID, TARGET_CHAIN_ID, 1n);
     const mined = {
       requestId,
       sourceContract: deployer,
-      targetContract: estTarget.address,
+      targetContract: deployer,
       methodCall: {
         selector: "0x00000000" as const,
-        data: entryCall,
+        data: "0x" as `0x${string}`,
         datatypes: [] as const,
         datalens: [] as const,
       },
@@ -160,14 +140,13 @@ describe("zero-budget return legs", {
       callerFee: 0n,
     };
 
-    const mineHash = await target.write.batchProcessRequests([SOURCE_CHAIN_ID, [mined]], {
-      account: deployer,
-      gas: 10_000_000n,
-    });
-    await publicClient.waitForTransactionReceipt({ hash: mineHash, ...receiptWaitOptions });
-
-    const err = await target.read.errors([requestId]);
-    assert.equal(BigInt((err as any).errorCode ?? (err as any)[1]), 1n);
-    assert.equal(await target.read.getRequestsLen([SOURCE_CHAIN_ID]), 0n);
+    await assert.rejects(
+      () =>
+        target.write.batchProcessRequests([SOURCE_CHAIN_ID, [mined]], {
+          account: deployer,
+          gas: 10_000_000n,
+        }),
+      /InvalidTwoWayCallerFee/
+    );
   });
 });

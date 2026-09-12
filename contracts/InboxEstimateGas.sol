@@ -113,6 +113,7 @@ abstract contract InboxEstimateGas is InboxBase {
         if (mined.callerFee > remoteCaps.maxExecutionGas) {
             revert FeeGasTooHigh(mined.callerFee, remoteCaps.maxExecutionGas);
         }
+        _requireValidTwoWayIngest(mined.isTwoWay, mined.callbackSelector, mined.errorSelector, mined.callerFee);
 
         _enterEstimateMode();
 
