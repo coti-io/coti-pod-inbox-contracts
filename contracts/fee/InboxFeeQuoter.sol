@@ -19,6 +19,9 @@ contract InboxFeeQuoter {
         uint16 gasPriceDiv;
     }
 
+    /// @notice Quoted remote gas units exceed the remote template's maxExecutionGas.
+    error FeeGasTooHigh(uint256 feeGas, uint256 maxGas);
+
     /// @notice Rough local-token wei cost at `gasPrice` for a two-way send.
     function calculateTwoWayFeeRequiredInLocalToken(
         FeeConfig calldata localMin,
@@ -34,6 +37,9 @@ contract InboxFeeQuoter {
         require(remoteMin.gasPriceMul != 0 && remoteMin.gasPriceDiv != 0, "FeeConfigInvalid");
         require(localMin.gasPriceMul != 0 && localMin.gasPriceDiv != 0, "FeeConfigInvalid");
         uint256 targetGasRemoteUnits = _expectedMinFee(remoteMethodCallSize, remoteMin) + remoteMethodExecutionGas;
+        if (targetGasRemoteUnits > remoteMin.maxExecutionGas) {
+            revert FeeGasTooHigh(targetGasRemoteUnits, remoteMin.maxExecutionGas);
+        }
         uint256 callerGasLocalUnits = _expectedMinFee(callBackMethodCallSize, localMin) + callBackMethodExecutionGas;
         targetGasRemoteUnits = Math.mulDiv(
             targetGasRemoteUnits, uint256(remoteMin.gasPriceDiv), uint256(remoteMin.gasPriceMul), Math.Rounding.Ceil

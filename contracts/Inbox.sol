@@ -18,9 +18,6 @@ contract Inbox is InboxMiner, Initializable {
     /// @dev `msg.sender` at construction (CreateX under atomic init, or the EOA in tests).
     address private _initDeployer;
 
-    /// @notice {init} was called by an account other than the constructor deployer.
-    error InitCallerNotDeployer();
-
     /// @dev Placeholder owner until {init}; fixed address keeps creation bytecode identical on every chain.
     ///      After atomic init, owner must be the intended admin (deploy scripts assert `owner() != address(1)`).
     constructor() Ownable(address(1)) {
@@ -38,9 +35,8 @@ contract Inbox is InboxMiner, Initializable {
         external
         initializer
     {
-        if (msg.sender != _initDeployer) {
-            revert InitCallerNotDeployer();
-        }
+        // Bare revert keeps create bytecode under the Spurious Dragon limit.
+        if (msg.sender != _initDeployer) revert();
         if (initialOwner == address(0)) {
             revert OwnableInvalidOwner(initialOwner);
         }

@@ -12,7 +12,7 @@ abstract contract ModuleCallBase {
     /// @notice Module address was zero when a call was required.
     error ModuleNotConfigured(address module);
     /// @notice Module address has no code (DELEGATECALL would silently no-op).
-    error ModuleHasNoCode(address module);
+    error ModuleHasNoCode();
 
     /// @dev DELEGATECALL into `module` with `callData`; bubbles revert data. `address(this)` stays the Inbox.
     function _delegateModule(address module, bytes memory callData) internal returns (bytes memory) {

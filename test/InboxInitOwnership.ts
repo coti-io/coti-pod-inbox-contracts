@@ -41,7 +41,7 @@ describe("Inbox init ownership", { concurrency: false, timeout: 1_800_000 }, () 
         inbox.write.init([other, 1000n, mpcAbiReEncodeOf(inbox), feeManagerOf(inbox)], {
           account: other,
         }),
-      /InitCallerNotDeployer/
+      /reverted/
     );
   });
 
