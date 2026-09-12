@@ -131,6 +131,30 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
     );
   });
 
+  it("rejects updateMinFeeConfigs when gasPriceMul/Div ratio exceeds 100x", async () => {
+    const { viem, publicClient, wallet, deployer } = await connect();
+    const inbox = await deployTestInbox(viem, { client: { public: publicClient, wallet } });
+    await inbox.write.init([deployer, SOURCE_CHAIN_ID, mpcAbiReEncodeOf(inbox), feeManagerOf(inbox)], { account: deployer });
+    const bad = { ...FEE, gasPriceMul: 65535n, gasPriceDiv: 1n };
+    await assert.rejects(
+      () => inbox.write.updateMinFeeConfigs([{ ...bad }, { ...FEE }], { account: deployer }),
+      /FeeConfigInvalid/
+    );
+  });
+
+  it("accepts documented 13/1 and 1/10 gas-price skew ratios", async () => {
+    const { viem, publicClient, wallet, deployer } = await connect();
+    const inbox = await deployTestInbox(viem, { client: { public: publicClient, wallet } });
+    await inbox.write.init([deployer, SOURCE_CHAIN_ID, mpcAbiReEncodeOf(inbox), feeManagerOf(inbox)], { account: deployer });
+    await inbox.write.updateMinFeeConfigs(
+      [
+        { ...FEE, gasPriceMul: 13n, gasPriceDiv: 1n },
+        { ...FEE, gasPriceMul: 1n, gasPriceDiv: 10n },
+      ],
+      { account: deployer }
+    );
+  });
+
   it("reverts create when methodCall payload weight exceeds maxMethodCallBytes", async () => {
     const { source, deployer } = await deployPair();
     const fat = minimalMethodCall(toHex(new Uint8Array(9000)));

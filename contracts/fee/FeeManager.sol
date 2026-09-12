@@ -270,6 +270,13 @@ contract FeeManager {
         if (feeConfig.gasPriceMul == 0 || feeConfig.gasPriceDiv == 0) {
             revert FeeConfigInvalid(feeConfig);
         }
+        // Reject absurd skew (e.g. 65535/1) while admitting documented lane ratios (13/1, 1/10).
+        if (
+            uint256(feeConfig.gasPriceMul) > 100 * uint256(feeConfig.gasPriceDiv)
+                || uint256(feeConfig.gasPriceDiv) > 100 * uint256(feeConfig.gasPriceMul)
+        ) {
+            revert FeeConfigInvalid(feeConfig);
+        }
         if (feeConfig.constantFee > 0 && feeConfig.maxExecutionGas <= feeConfig.constantFee) {
             revert FeeConfigInvalid(feeConfig);
         }
