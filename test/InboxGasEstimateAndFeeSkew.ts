@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { decodeErrorResult, encodeFunctionData, toHex } from "viem";
+import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
@@ -81,9 +82,7 @@ describe("estimateExecutionGasForMiner and gasPriceMul/Div", {
     return { ...env, source, target, estTarget };
   };
 
-  const packRequestId = (source: bigint, dest: bigint, nonce: bigint): `0x${string}` =>
-    toHex((source << 192n) | (dest << 128n) | nonce, { size: 32 });
-
+  
   const parseEstimate = (e: any) => {
     const raw = e?.data ?? e?.cause?.data ?? e?.walk?.()?.data;
     const data = typeof raw === "string" ? raw : raw?.data;
@@ -219,7 +218,7 @@ describe("estimateExecutionGasForMiner and gasPriceMul/Div", {
     assert.equal(storedId, "0x" + "00".repeat(32));
   });
 
-  it("public eth_call works from a non-miner account", async () => {
+  it("rejects estimate from a non-miner account", async () => {
     const { publicClient, other, target, estTarget, deployer } = await deployPair();
     await estTarget.write.configure([0n, false, false, "0x"], { account: deployer });
     const mined = {
@@ -239,19 +238,20 @@ describe("estimateExecutionGasForMiner and gasPriceMul/Div", {
       targetFee: 300_000n,
       callerFee: 0n,
     };
-    try {
-      await publicClient.simulateContract({
-        address: target.address,
-        abi: target.abi,
-        functionName: "estimateExecutionGasForMiner",
-        args: [SOURCE_CHAIN_ID, mined, 500_000n],
-        account: other,
-      });
-      assert.fail("expected estimate revert");
-    } catch (e: any) {
-      const decoded = parseEstimate(e);
-      assert.equal(decoded.errorName, "ExecutionGasEstimate");
-      assert.ok((decoded.args[0] as bigint) > 0n);
-    }
+    await assert.rejects(
+      () =>
+        publicClient.simulateContract({
+          address: target.address,
+          abi: target.abi,
+          functionName: "estimateExecutionGasForMiner",
+          args: [SOURCE_CHAIN_ID, mined, 500_000n],
+          account: other,
+        }),
+      (e: any) => {
+        const msg = String(e?.message ?? e?.shortMessage ?? e);
+        assert.match(msg, /NotMiner|not miner/i);
+        return true;
+      }
+    );
   });
 });

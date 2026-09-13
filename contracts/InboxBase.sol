@@ -51,6 +51,8 @@ contract InboxBase is IInbox, FeeManagerStubBase {
     error ZeroCallbackBudget();
     /// @notice Two-way send requires distinct non-zero `callbackSelector` and `errorSelector`.
     error InvalidTwoWaySelectors();
+    /// @notice Ingested two-way request must carry a non-zero prepaid callback gas budget.
+    error InvalidTwoWayCallerFee();
     error ErrorNotFound();
     error ResponseNotFound();
     error CannotSendToSameChain();
@@ -59,12 +61,19 @@ contract InboxBase is IInbox, FeeManagerStubBase {
     error SourceChainIdTooLarge();
     error TargetChainIdTooLarge();
     error NonceTooLarge();
+    /// @notice Mined request id carries a different Inbox generation than this deployment.
+    error RequestIdVersionMismatch(uint8 got, uint8 expected);
     error RawCallHasDatatypes();
     error RawCallHasDatalens();
     error MpcAbiReEncodeRequired();
     /// @notice Circuit breaker: outbound sends / inbound processing are paused.
     error MessageProcessingPaused();
 
+    /// @notice Generation byte embedded in every request id from this Inbox.
+    /// @dev A redeployed Inbox with a bumped version cannot re-issue ids from a prior deployment.
+    uint8 public constant REQUEST_ID_VERSION = 1;
+    /// @dev Nonce width after reserving 8 bits for {REQUEST_ID_VERSION} in the low 128-bit half.
+    uint256 private constant _REQUEST_ID_NONCE_MASK = (uint256(1) << 120) - 1;
     /// @notice Storage-free re-encode helper; Inbox DELEGATECALLs it (COTI). Zero on non-MPC chains.
     address public mpcAbiReEncode;
 
@@ -173,8 +182,12 @@ contract InboxBase is IInbox, FeeManagerStubBase {
         if (_initialized) revert AlreadyInitialized();
         _initialized = true;
         chainId = _chainId == 0 ? block.chainid : _chainId;
-        mpcAbiReEncode = _mpcAbiReEncode;
         if (_feeManager == address(0)) revert ModuleNotConfigured(_feeManager);
+        if (_feeManager.code.length == 0) revert ModuleHasNoCode();
+        if (_mpcAbiReEncode != address(0) && _mpcAbiReEncode.code.length == 0) {
+            revert ModuleHasNoCode();
+        }
+        mpcAbiReEncode = _mpcAbiReEncode;
         feeManager = _feeManager;
         _ensureFeeDefaults();
     }
@@ -472,6 +485,24 @@ contract InboxBase is IInbox, FeeManagerStubBase {
         );
     }
 
+    /// @dev Mirror send-path two-way invariants at dest ingest / estimate (miner-supplied fields).
+    function _requireValidTwoWayIngest(
+        bool isTwoWay,
+        bytes4 callbackSelector,
+        bytes4 errorSelector,
+        uint256 callerFee
+    ) internal pure {
+        if (!isTwoWay) {
+            return;
+        }
+        if (callbackSelector == bytes4(0) || errorSelector == bytes4(0) || callbackSelector == errorSelector) {
+            revert InvalidTwoWaySelectors();
+        }
+        if (callerFee == 0) {
+            revert InvalidTwoWayCallerFee();
+        }
+    }
+
     /// @dev Creates and stores a request and emits {MessageSent}.
     function _createRequest(
         uint256 targetChainId,
@@ -644,9 +675,9 @@ contract InboxBase is IInbox, FeeManagerStubBase {
         datalenCount = uint16(methodCall.datalens.length);
     }
 
-    /// @dev Packs source chain id (64 bits), target chain id (64 bits) and nonce (128 bits) into a
-    /// `bytes32` request id. Encoding both chain ids makes the id globally unique and lets either
-    /// side recover its routing from the id alone.
+    /// @dev Packs source chain id (64 bits), target chain id (64 bits), Inbox generation (8 bits),
+    /// and nonce (120 bits) into a `bytes32` request id. The generation byte ensures a redeployed
+    /// Inbox cannot re-issue ids from a prior deployment on the same lane.
     function _packRequestId(uint256 sourceChainId, uint256 targetChainId, uint256 nonce)
         internal
         pure
@@ -654,10 +685,10 @@ contract InboxBase is IInbox, FeeManagerStubBase {
     {
         if (sourceChainId > type(uint64).max) revert SourceChainIdTooLarge();
         if (targetChainId > type(uint64).max) revert TargetChainIdTooLarge();
-        if (nonce > type(uint128).max) revert NonceTooLarge();
+        if (nonce > _REQUEST_ID_NONCE_MASK) revert NonceTooLarge();
         return bytes32(
             (uint256(uint64(sourceChainId)) << 192) | (uint256(uint64(targetChainId)) << 128)
-                | uint256(uint128(nonce))
+                | (uint256(REQUEST_ID_VERSION) << 120) | nonce
         );
     }
 
@@ -670,7 +701,15 @@ contract InboxBase is IInbox, FeeManagerStubBase {
         uint256 packed = uint256(requestId);
         sourceChainId = uint256(uint64(packed >> 192));
         targetChainId = uint256(uint64(packed >> 128));
-        nonce = uint256(uint128(packed));
+        nonce = packed & _REQUEST_ID_NONCE_MASK;
+    }
+
+    /// @dev Reverts unless the id was minted by this Inbox generation.
+    function _requireRequestIdVersion(bytes32 requestId) internal pure {
+        uint8 got = uint8(uint256(requestId) >> 120);
+        if (got != REQUEST_ID_VERSION) {
+            revert RequestIdVersionMismatch(got, REQUEST_ID_VERSION);
+        }
     }
 
     /// @dev Raw calldata passthrough if selector is zero; otherwise DELEGATECALL {MpcAbiReEncode}.

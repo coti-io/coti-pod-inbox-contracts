@@ -180,7 +180,8 @@ contract FeeManager {
         targetGasRemoteUnits =
             _applyGasPriceSkew(Math.mulDiv(remoteGasWei / gasPrice, localPrice, remotePrice), remoteMin);
 
-        if (callerGasLocalUnits < expectedMinFee(dataSize, localMin)) {
+        // Return-leg floor ignores outbound payload bytes (those apply only to the forward leg).
+        if (callerGasLocalUnits < expectedMinFee(0, localMin)) {
             revert CallbackFeeTooLow(callerGasLocalUnits);
         }
 
@@ -269,7 +270,14 @@ contract FeeManager {
         if (feeConfig.gasPriceMul == 0 || feeConfig.gasPriceDiv == 0) {
             revert FeeConfigInvalid(feeConfig);
         }
-        if (feeConfig.constantFee > 0 && feeConfig.maxExecutionGas < feeConfig.constantFee) {
+        // Reject absurd skew (e.g. 65535/1) while admitting documented lane ratios (13/1, 1/10).
+        if (
+            uint256(feeConfig.gasPriceMul) > 100 * uint256(feeConfig.gasPriceDiv)
+                || uint256(feeConfig.gasPriceDiv) > 100 * uint256(feeConfig.gasPriceMul)
+        ) {
+            revert FeeConfigInvalid(feeConfig);
+        }
+        if (feeConfig.constantFee > 0 && feeConfig.maxExecutionGas <= feeConfig.constantFee) {
             revert FeeConfigInvalid(feeConfig);
         }
         if (
@@ -279,6 +287,11 @@ contract FeeManager {
                         || feeConfig.bufferRatioX10000 == 0
                 )
         ) {
+            revert FeeConfigInvalid(feeConfig);
+        }
+        // Variable templates must leave headroom under maxExecutionGas for a zero-byte return-leg floor
+        // (same class of hole as constantFee >= maxExecutionGas).
+        if (feeConfig.constantFee == 0 && expectedMinFee(0, feeConfig) >= feeConfig.maxExecutionGas) {
             revert FeeConfigInvalid(feeConfig);
         }
     }

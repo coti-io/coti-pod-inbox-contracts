@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { encodeFunctionData, toHex } from "viem";
+import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
@@ -26,10 +27,6 @@ const FEE = {
   gasPriceDiv: 1n,
 } as const;
 
-const packRequestId = (source: bigint, target: bigint, nonce: bigint): `0x${string}` => {
-  const packed = (source << 192n) | (target << 128n) | nonce;
-  return toHex(packed, { size: 32 });
-};
 
 describe("maxMessageLife terminalization", {
   concurrency: false,
@@ -151,26 +148,20 @@ describe("maxMessageLife terminalization", {
     );
   });
 
-  it("zero callerFee still terminalizes locally without outbound return leg", async () => {
-    const { inbox, target, deployer, publicClient, provider } = await setup();
-    const requestId = await mineFailingTwoWay({
-      inbox,
-      target,
-      deployer,
-      publicClient,
-      nonce: 1n,
-      callerFee: 0n,
-    });
-
-    await provider.request({ method: "evm_increaseTime", params: [Number(MESSAGE_LIFE_SECONDS) + 1] });
-    await provider.request({ method: "evm_mine", params: [] });
-
-    const ttlHash = await inbox.write.retryFailedRequest([requestId], { account: deployer, gas: 4_000_000n });
-    await publicClient.waitForTransactionReceipt({ hash: ttlHash, ...receiptWaitOptions });
-
-    const errAfter = await inbox.read.errors([requestId]);
-    assert.equal(BigInt((errAfter as any).errorCode ?? (errAfter as any)[1]), ERROR_CODE_EXPIRED);
-    assert.equal(await inbox.read.getRequestsLen([SOURCE_CHAIN_ID]), 0n);
+  it("rejects two-way ingest with zero callerFee", async () => {
+    const { inbox, target, deployer, publicClient } = await setup();
+    await assert.rejects(
+      () =>
+        mineFailingTwoWay({
+          inbox,
+          target,
+          deployer,
+          publicClient,
+          nonce: 1n,
+          callerFee: 0n,
+        }),
+      /InvalidTwoWayCallerFee/
+    );
   });
 
   it("maxMessageLife=0 keeps uncapped retry behavior", async () => {

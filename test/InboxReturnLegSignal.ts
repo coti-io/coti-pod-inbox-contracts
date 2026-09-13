@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { decodeEventLog, encodeFunctionData, toFunctionSelector, toHex } from "viem";
+import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
@@ -26,10 +27,6 @@ const FEE = {
   gasPriceDiv: 1n,
 } as const;
 
-const packRequestId = (source: bigint, target: bigint, nonce: bigint): `0x${string}` => {
-  const packed = (source << 192n) | (target << 128n) | nonce;
-  return toHex(packed, { size: 32 });
-};
 
 const rawMethod = (data: `0x${string}`) => ({
   selector: "0x00000000" as `0x${string}`,

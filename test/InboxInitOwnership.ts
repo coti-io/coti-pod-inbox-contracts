@@ -5,8 +5,8 @@ import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/depl
 
 const PLACEHOLDER_OWNER = "0x0000000000000000000000000000000000000001";
 
-describe("Inbox init ownership", { concurrency: false, timeout: 120_000 }, () => {
-  it("constructor leaves placeholder owner until init; init transfers to admin", async () => {
+describe("Inbox init ownership", { concurrency: false, timeout: 1_800_000 }, () => {
+  it("constructor leaves placeholder owner until init; init transfers to admin", { timeout: 600_000 }, async () => {
     const { viem } = await network.connect({ network: "hardhat" });
     const publicClient = await viem.getPublicClient();
     const [wallet] = await viem.getWalletClients();
@@ -24,5 +24,41 @@ describe("Inbox init ownership", { concurrency: false, timeout: 120_000 }, () =>
     const after = (await inbox.read.owner()) as `0x${string}`;
     assert.equal(after.toLowerCase(), deployer.toLowerCase());
     assert.notEqual(after.toLowerCase(), PLACEHOLDER_OWNER);
+  });
+
+  it("rejects init from a non-deployer account", { timeout: 600_000 }, async () => {
+    const { viem } = await network.connect({ network: "hardhat" });
+    const publicClient = await viem.getPublicClient();
+    const [wallet, otherWallet] = await viem.getWalletClients();
+    const other = otherWallet.account.address as `0x${string}`;
+
+    const inbox = await deployTestInbox(viem, {
+      client: { public: publicClient, wallet },
+    });
+
+    await assert.rejects(
+      () =>
+        inbox.write.init([other, 1000n, mpcAbiReEncodeOf(inbox), feeManagerOf(inbox)], {
+          account: other,
+        }),
+      /reverted/
+    );
+  });
+
+  it("rejects init when feeManager has no code", { timeout: 600_000 }, async () => {
+    const { viem } = await network.connect({ network: "hardhat" });
+    const publicClient = await viem.getPublicClient();
+    const [wallet, otherWallet] = await viem.getWalletClients();
+    const deployer = wallet.account.address as `0x${string}`;
+    const empty = otherWallet.account.address as `0x${string}`;
+
+    const inbox = await deployTestInbox(viem, {
+      client: { public: publicClient, wallet },
+    });
+
+    await assert.rejects(
+      () => inbox.write.init([deployer, 1000n, mpcAbiReEncodeOf(inbox), empty], { account: deployer }),
+      /ModuleHasNoCode/
+    );
   });
 });

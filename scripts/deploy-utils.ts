@@ -105,9 +105,9 @@ export type FeeConfigJson = {
   maxMethodCallBytes: string | number;
   /** Max gas-unit budget for targetFee/callerFee; required even when constantFee > 0. */
   maxExecutionGas: string | number;
-  /** Gas-price skew numerator vs peer chain (default 1). */
+  /** Gas-price skew numerator vs peer chain (required in JSON). */
   gasPriceMul: string | number;
-  /** Gas-price skew denominator vs peer chain (default 1). */
+  /** Gas-price skew denominator vs peer chain (required in JSON). */
   gasPriceDiv: string | number;
 };
 
@@ -362,13 +362,27 @@ export const assertFeeConfigPairErrorLengths = (pair: {
   assertErrorLengthWithinReturnDataCap(pair.remote, "remote FeeConfig");
 };
 
-/** Ship constant-fee at the protocol execution-gas ceiling (≥ worst-case floor). */
-const FEE_CONFIG_COTI_SIDE_CONSTANT = PROTOCOL_MAX_EXECUTION_GAS;
+/** Ship constant-fee below the protocol execution-gas ceiling so price-ratio quantization can hit the band. */
+const FEE_CONFIG_COTI_SIDE_CONSTANT = 20_000_000n;
+
+/**
+ * Live-lane remote `gasPriceMul/Div` (create chain → remote leg). Hardhat keeps identity 1/1.
+ * @see docs/ESTIMATE_EXECUTION_GAS.md shipped ratios.
+ */
+export const LIVE_LANE_REMOTE_GAS_PRICE_SKEW = {
+  /** Sepolia → COTI testnet (and ETH mainnet → COTI). */
+  sepoliaToCoti: { gasPriceMul: 5n, gasPriceDiv: 1n },
+  /** Fuji / Avalanche → COTI. */
+  fujiToCoti: { gasPriceMul: 13n, gasPriceDiv: 1n },
+  /** COTI → L1 (covers ETH~5 and AVAX~13 with margin). */
+  cotiToL1: { gasPriceMul: 1n, gasPriceDiv: 10n },
+} as const;
 
 /**
  * Sepolia-side fee template (variable minimum): `constantFee == 0` and all template fields non-zero.
  * Used as **local** on Sepolia and as **remote** on COTI when paired with {@link FEE_CONFIG_COTI_SIDE}.
  * On-chain `FeeConfig` fields are `uint32` (one storage slot); values must fit.
+ * Base skew is identity; {@link testnetMinFeeConfigsForChain} applies live-lane remote ratios.
  */
 export const FEE_CONFIG_SEPOLIA_SIDE = {
   constantFee: 0n,
@@ -387,7 +401,9 @@ export const FEE_CONFIG_SEPOLIA_SIDE = {
  * COTI-side fee template (constant minimum gas units): `constantFee > 0` and other variable fields zero.
  * Max size/gas caps are still required. Used as **remote** on Sepolia and as **local** on COTI when paired
  * with {@link FEE_CONFIG_SEPOLIA_SIDE}.
- * `constantFee` ships at {@link PROTOCOL_MAX_EXECUTION_GAS} (ceiling == maxExecutionGas); floor is lower.
+ * `constantFee` ships below {@link PROTOCOL_MAX_EXECUTION_GAS} so the admissible gas band is wider than one
+ * price-ratio step; `maxExecutionGas` stays at the protocol ceiling.
+ * Base skew is identity; {@link testnetMinFeeConfigsForChain} applies live-lane remote ratios.
  */
 export const FEE_CONFIG_COTI_SIDE = {
   constantFee: FEE_CONFIG_COTI_SIDE_CONSTANT,
@@ -396,8 +412,8 @@ export const FEE_CONFIG_COTI_SIDE = {
   errorLength: 0n,
   bufferRatioX10000: 0n,
   maxMethodCallBytes: DEFAULT_MAX_METHOD_CALL_BYTES,
-  // Must be ≥ constantFee or create/ingest always reverts FeeGasTooHigh.
-  maxExecutionGas: FEE_CONFIG_COTI_SIDE_CONSTANT,
+  // Must be strictly greater than constantFee (on-chain validator rejects equality).
+  maxExecutionGas: PROTOCOL_MAX_EXECUTION_GAS,
   gasPriceMul: 1n,
   gasPriceDiv: 1n,
 } as const;
@@ -415,17 +431,22 @@ export type FeeConfigTuple = {
 };
 
 /** Convert a deployConfig.json fee template into an on-chain `FeeConfig` tuple. */
-export const feeConfigTupleFromJson = (j: FeeConfigJson): FeeConfigTuple => ({
-  constantFee: BigInt(j.constantFee),
-  gasPerByte: BigInt(j.gasPerByte),
-  callbackExecutionGas: BigInt(j.callbackExecutionGas),
-  errorLength: BigInt(j.errorLength),
-  bufferRatioX10000: BigInt(j.bufferRatioX10000),
-  maxMethodCallBytes: BigInt(j.maxMethodCallBytes),
-  maxExecutionGas: BigInt(j.maxExecutionGas),
-  gasPriceMul: BigInt(j.gasPriceMul ?? 1),
-  gasPriceDiv: BigInt(j.gasPriceDiv ?? 1),
-});
+export const feeConfigTupleFromJson = (j: FeeConfigJson): FeeConfigTuple => {
+  if (j.gasPriceMul === undefined || j.gasPriceMul === null || j.gasPriceDiv === undefined || j.gasPriceDiv === null) {
+    throw new Error("feeConfig JSON requires gasPriceMul and gasPriceDiv (no identity default)");
+  }
+  return {
+    constantFee: BigInt(j.constantFee),
+    gasPerByte: BigInt(j.gasPerByte),
+    callbackExecutionGas: BigInt(j.callbackExecutionGas),
+    errorLength: BigInt(j.errorLength),
+    bufferRatioX10000: BigInt(j.bufferRatioX10000),
+    maxMethodCallBytes: BigInt(j.maxMethodCallBytes),
+    maxExecutionGas: BigInt(j.maxExecutionGas),
+    gasPriceMul: BigInt(j.gasPriceMul),
+    gasPriceDiv: BigInt(j.gasPriceDiv),
+  };
+};
 
 /** Convert an on-chain `FeeConfig` tuple into a JSON-safe deployConfig.json template. */
 export const feeConfigTupleToJson = (t: FeeConfigTuple): FeeConfigJson => ({
@@ -444,13 +465,33 @@ export const feeConfigTupleToJson = (t: FeeConfigTuple): FeeConfigJson => ({
  * Minimum fee templates for this inbox: **local** = this chain's native leg, **remote** = the paired chain's leg.
  * Sepolia: local ETH (variable), remote COTI (constant). COTI: local COTI (constant), remote ETH (variable).
  */
+/**
+ * Minimum fee templates for this inbox: **local** = this chain's native leg, **remote** = the paired chain's leg.
+ * Sepolia: local ETH (variable), remote COTI (constant + live skew). COTI: local COTI (constant), remote ETH (variable + live skew).
+ * Hardhat (`31337`) keeps identity remote skew for deterministic tests.
+ */
 export const testnetMinFeeConfigsForChain = (chainId: number): { local: FeeConfigTuple; remote: FeeConfigTuple } => {
   const cotiTestnetId = Number(process.env.COTI_TESTNET_CHAIN_ID || "7082400");
-  if (chainId === 11155111 || chainId === 31337 || chainId === AVALANCHE_FUJI_CHAIN_ID) {
+  if (chainId === 31337) {
     return { local: { ...FEE_CONFIG_SEPOLIA_SIDE }, remote: { ...FEE_CONFIG_COTI_SIDE } };
   }
+  if (chainId === 11155111) {
+    return {
+      local: { ...FEE_CONFIG_SEPOLIA_SIDE },
+      remote: { ...FEE_CONFIG_COTI_SIDE, ...LIVE_LANE_REMOTE_GAS_PRICE_SKEW.sepoliaToCoti },
+    };
+  }
+  if (chainId === AVALANCHE_FUJI_CHAIN_ID) {
+    return {
+      local: { ...FEE_CONFIG_SEPOLIA_SIDE },
+      remote: { ...FEE_CONFIG_COTI_SIDE, ...LIVE_LANE_REMOTE_GAS_PRICE_SKEW.fujiToCoti },
+    };
+  }
   if (chainId === cotiTestnetId) {
-    return { local: { ...FEE_CONFIG_COTI_SIDE }, remote: { ...FEE_CONFIG_SEPOLIA_SIDE } };
+    return {
+      local: { ...FEE_CONFIG_COTI_SIDE },
+      remote: { ...FEE_CONFIG_SEPOLIA_SIDE, ...LIVE_LANE_REMOTE_GAS_PRICE_SKEW.cotiToL1 },
+    };
   }
   throw new Error(
     `Unsupported chainId ${chainId} for testnet fee configs. ` +

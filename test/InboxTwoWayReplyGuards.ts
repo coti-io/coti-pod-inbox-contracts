@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { encodeFunctionData, toHex } from "viem";
+import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
@@ -85,9 +86,7 @@ describe("two-way reply guards (respond/raise)", {
     return { ...env, source, target, estTarget };
   };
 
-  const packRequestId = (source: bigint, dest: bigint, nonce: bigint): `0x${string}` =>
-    toHex((source << 192n) | (dest << 128n) | nonce, { size: 32 });
-
+  
   const mineEntry = async (params: {
     target: any;
     estTarget: any;
@@ -179,26 +178,23 @@ describe("two-way reply guards (respond/raise)", {
     assert.equal(await target.read.getRequestsLen([SOURCE_CHAIN_ID]), 0n);
   });
 
-  it("respond with zero callbackSelector reverts NoCallbackHandler", async () => {
+  it("rejects two-way ingest with zero callbackSelector", async () => {
     const { target, estTarget, deployer, publicClient } = await deployPair();
     await estTarget.write.configure([0n, true, false, "0xabcd"], { account: deployer });
 
-    const mined = await mineEntry({
-      target,
-      estTarget,
-      deployer,
-      publicClient,
-      isTwoWay: true,
-      callbackSelector: "0x00000000",
-      errorSelector: "0x87654321",
-    });
-
-    const err = await target.read.errors([mined.requestId]);
-    const errorCode = BigInt((err as any).errorCode ?? (err as any)[1]);
-    assert.equal(errorCode, 1n);
-
-    const outLen = await target.read.getRequestsLen([SOURCE_CHAIN_ID]);
-    assert.equal(outLen, 0n);
+    await assert.rejects(
+      () =>
+        mineEntry({
+          target,
+          estTarget,
+          deployer,
+          publicClient,
+          isTwoWay: true,
+          callbackSelector: "0x00000000",
+          errorSelector: "0x87654321",
+        }),
+      /InvalidTwoWaySelectors/
+    );
   });
 
   it("two-way respond still creates a return leg", async () => {
