@@ -145,7 +145,7 @@ describe("zero-budget return legs", {
     };
 
     await assert.rejects(
-      () => target.write.batchProcessRequests(await mineArgs(target, SOURCE_CHAIN_ID, [mined]), {
+      async () => target.write.batchProcessRequests(await mineArgs(target, SOURCE_CHAIN_ID, [mined]), {
         account: deployer,
         gas: 10_000_000n,
       }),

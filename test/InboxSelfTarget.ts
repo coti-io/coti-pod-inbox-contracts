@@ -67,7 +67,7 @@ describe("reject Inbox as own target", { concurrency: false, timeout: 1_200_000 
   it("batchProcessRequests reverts when targetContract is the Inbox", { timeout: 600_000 }, async () => {
     const { inbox, deployer } = await setup();
     await assert.rejects(
-      () =>
+      async () =>
         inbox.write.batchProcessRequests(
           await mineArgs(inbox, SOURCE_CHAIN_ID, [minedSelf(inbox.address, deployer)]),
           {

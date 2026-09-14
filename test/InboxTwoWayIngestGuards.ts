@@ -71,7 +71,7 @@ describe("two-way ingest field validation", {
   it("rejects duplicate selectors at ingest", async () => {
     const { inbox, deployer } = await setup();
     await assert.rejects(
-      () =>
+      async () =>
         inbox.write.batchProcessRequests(
           await mineArgs(inbox, SOURCE_CHAIN_ID, [
             baseMined(deployer, {
@@ -88,7 +88,7 @@ describe("two-way ingest field validation", {
   it("rejects zero errorSelector at ingest", async () => {
     const { inbox, deployer } = await setup();
     await assert.rejects(
-      () =>
+      async () =>
         inbox.write.batchProcessRequests(
           await mineArgs(inbox, SOURCE_CHAIN_ID, [
             baseMined(deployer, { errorSelector: "0x00000000" }),
