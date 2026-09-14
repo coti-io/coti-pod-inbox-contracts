@@ -4,6 +4,7 @@ import { packRequestId } from "./packRequestId.js";
 import { network } from "hardhat";
 import { oracleTokensForChain } from "../scripts/oracle-tokens.js";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 
 const SOURCE_CHAIN_ID = 1000n;
 const TARGET_CHAIN_ID = 1001n;
@@ -33,6 +34,7 @@ describe("reject Inbox as own target", { concurrency: false, timeout: 1_200_000 
     });
     await inbox.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await inbox.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(inbox, deployer);
     const oracle = await viem.deployContract("PriceOracle", [deployer], {
       client: { public: publicClient, wallet },
     });
@@ -66,10 +68,13 @@ describe("reject Inbox as own target", { concurrency: false, timeout: 1_200_000 
     const { inbox, deployer } = await setup();
     await assert.rejects(
       () =>
-        inbox.write.batchProcessRequests([SOURCE_CHAIN_ID, [minedSelf(inbox.address, deployer)]], {
-          account: deployer,
-          gas: 2_000_000n,
-        }),
+        inbox.write.batchProcessRequests(
+          await mineArgs(inbox, SOURCE_CHAIN_ID, [minedSelf(inbox.address, deployer)]),
+          {
+            account: deployer,
+            gas: 2_000_000n,
+          }
+        ),
       /reverted/
     );
   });
