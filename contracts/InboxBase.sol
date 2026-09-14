@@ -182,9 +182,9 @@ contract InboxBase is IInbox, FeeManagerStubBase {
         _initialized = true;
         chainId = _chainId == 0 ? block.chainid : _chainId;
         if (_feeManager == address(0)) revert ModuleNotConfigured(_feeManager);
-        if (_feeManager.code.length == 0) revert ModuleHasNoCode(_feeManager);
+        if (_feeManager.code.length == 0) revert ModuleHasNoCode();
         if (_mpcAbiReEncode != address(0) && _mpcAbiReEncode.code.length == 0) {
-            revert ModuleHasNoCode(_mpcAbiReEncode);
+            revert ModuleHasNoCode();
         }
         mpcAbiReEncode = _mpcAbiReEncode;
         feeManager = _feeManager;
