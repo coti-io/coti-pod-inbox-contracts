@@ -14,7 +14,7 @@ library ChainlinkFeedLib {
 
     /// @notice Read a feed when fresh.
     /// @param feed Chainlink aggregator (`address(0)` disables reads).
-    /// @param maxStaleness Max seconds since `updatedAt` (`0` = no age check).
+    /// @param maxStaleness Max seconds since `updatedAt` (`0` = skip max-age only; future `updatedAt` is always rejected).
     function tryReadPrice(address feed, uint256 maxStaleness) internal view returns (bool ok, uint256 price) {
         if (feed == address(0) || feed.code.length == 0) {
             return (false, 0);
@@ -30,11 +30,12 @@ library ChainlinkFeedLib {
             if (answer <= 0 || answeredInRound < roundId) {
                 return (false, 0);
             }
-            // Non-overflowing age check; also reject future-dated feeds.
-            if (maxStaleness != 0) {
-                if (updatedAt > block.timestamp || block.timestamp - updatedAt > maxStaleness) {
-                    return (false, 0);
-                }
+            // Always reject future-dated feeds (even when maxStaleness is 0).
+            if (updatedAt > block.timestamp) {
+                return (false, 0);
+            }
+            if (maxStaleness != 0 && block.timestamp - updatedAt > maxStaleness) {
+                return (false, 0);
             }
             // `decimals()` is outside the `latestRoundData` try body so a reverting feed cannot
             // break the documented never-revert contract of this helper.
@@ -73,11 +74,12 @@ library ChainlinkFeedLib {
             if (answer <= 0 || answeredInRound < roundId) {
                 return (false, 0, updatedAt);
             }
-            // Non-overflowing age check; also reject future-dated feeds.
-            if (maxStaleness != 0) {
-                if (updatedAt > block.timestamp || block.timestamp - updatedAt > maxStaleness) {
-                    return (false, 0, updatedAt);
-                }
+            // Always reject future-dated feeds (even when maxStaleness is 0).
+            if (updatedAt > block.timestamp) {
+                return (false, 0, updatedAt);
+            }
+            if (maxStaleness != 0 && block.timestamp - updatedAt > maxStaleness) {
+                return (false, 0, updatedAt);
             }
             try AggregatorV3Interface(feed).decimals() returns (uint8 decimals) {
                 uint256 normalized = _normalizeTo18(uint256(answer), decimals);

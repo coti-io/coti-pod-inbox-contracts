@@ -14,7 +14,7 @@ library ChainlinkPriceReader {
 
     /// @notice Read one Chainlink feed when fresh.
     /// @param config Aggregator address (zero disables reads).
-    /// @param maxStaleness Max seconds since `updatedAt` (0 = ignore staleness).
+    /// @param maxStaleness Max seconds since `updatedAt` (0 = ignore max-age; future updatedAt still rejected).
     /// @return ok True when `price` is valid.
     /// @return price 18-decimal USD per whole token.
     function tryReadPrice(Config memory config, uint256 maxStaleness)
