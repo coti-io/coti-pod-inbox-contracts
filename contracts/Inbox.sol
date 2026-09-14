@@ -15,12 +15,21 @@ import "./InboxMiner.sol";
 /// Do **not** call `_disableInitializers()` here: this contract *is* the live instance (no separate
 /// implementation), and `{init}` must remain callable exactly once via the atomic CreateX path.
 contract Inbox is InboxMiner, Initializable {
+    /// @dev `msg.sender` at construction (CreateX under atomic init, or the EOA in tests).
+    address private _initDeployer;
+
+    /// @notice {init} was called by an account other than the constructor deployer.
+    error InitCallerNotDeployer();
+
     /// @dev Placeholder owner until {init}; fixed address keeps creation bytecode identical on every chain.
     ///      After atomic init, owner must be the intended admin (deploy scripts assert `owner() != address(1)`).
-    constructor() Ownable(address(1)) {}
+    constructor() Ownable(address(1)) {
+        _initDeployer = msg.sender;
+    }
 
     /// @notice One-time initializer: sets `chainId`, owner, and DELEGATECALL helpers.
     /// @dev Intended to run atomically inside CreateX `deployCreate3AndInit` (no front-run window).
+    ///      Caller must be the constructor deployer so a non-atomic init cannot be claimed by a stranger.
     /// @param initialOwner Address that becomes the {Ownable} owner (typically the deployer EOA).
     /// @param _chainId This chain's ID; pass `0` to use `block.chainid`.
     /// @param _mpcAbiReEncode COTI {MpcAbiReEncode} address, or `address(0)` on non-MPC chains.
@@ -29,6 +38,9 @@ contract Inbox is InboxMiner, Initializable {
         external
         initializer
     {
+        if (msg.sender != _initDeployer) {
+            revert InitCallerNotDeployer();
+        }
         if (initialOwner == address(0)) {
             revert OwnableInvalidOwner(initialOwner);
         }
