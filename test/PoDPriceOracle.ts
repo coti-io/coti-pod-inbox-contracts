@@ -178,4 +178,28 @@ describe("PoDPriceOracle", { concurrency: 1 }, async () => {
     await oracle.write.refreshCache([]);
     assert.equal(await oracle.read.getLocalTokenPriceUSD(), cached);
   });
+
+  it("failed pull does not advance lastFetchTimestamp (gate stays open)", async () => {
+    const feed = await viem.deployContract("MockChainlinkAggregator", [8, ETH_8], { client: c });
+    const ad = await viem.deployContract("ChainlinkLiveOracle", [owner, 3600n], { client: c });
+    await ad.write.setFeed([localToken, feed.address], { account: owner });
+    const oracle = await viem.deployContract("PoDPriceOracle", [owner, ad.address, 3600n], { client: c });
+    await oracle.write.setInboxTokens([localToken, remoteToken], { account: owner });
+    await oracle.write.setRemoteTokenPriceUSD([usdPerWholeToken18(TESTNET_COTI_USD)], { account: owner });
+    await oracle.write.refreshCache([]);
+    const afterOk = await oracle.read.lastFetchTimestamp();
+    assert.ok(afterOk > 0n);
+    assert.equal(await oracle.read.fetchGateOpen(), false);
+
+    await provider.request({ method: "evm_increaseTime", params: [3601] });
+    await provider.request({ method: "evm_mine", params: [] });
+    assert.equal(await oracle.read.fetchGateOpen(), true);
+
+    // Zero live answers for both legs (remote has no feed / no manualPrices peg).
+    await feed.write.setAnswer([0n], { account: owner });
+    await oracle.write.refreshCache([]);
+    assert.equal(await oracle.read.lastFetchTimestamp(), afterOk, "failed refresh must not lock the gate");
+    assert.equal(await oracle.read.fetchGateOpen(), true);
+    assert.equal(await oracle.read.getLocalTokenPriceUSD(), usdPerWholeToken18(TESTNET_ETH_USD));
+  });
 });
