@@ -359,9 +359,17 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
             return 0;
         }
 
+        // Empty-code targets (EOA / not yet deployed) return success=true from CALL with empty
+        // returndata; treat that as an execution failure so the source is notified (Z-22).
+        bool success;
+        bytes memory returnData;
         uint256 gasBeforeSubcall = gasleft();
-        (bool success, bytes memory returnData) =
-            _callWithCappedReturnData(targetContract, gasForCall, callData);
+        if (targetContract.code.length == 0) {
+            success = false;
+            returnData = bytes("");
+        } else {
+            (success, returnData) = _callWithCappedReturnData(targetContract, gasForCall, callData);
+        }
         gasUsed = gasBeforeSubcall - gasleft();
 
         uint256 gasRemainingApprox = targetGasBudget > gasUsed ? targetGasBudget - gasUsed : 0;
