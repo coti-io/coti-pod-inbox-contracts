@@ -343,6 +343,8 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         });
 
         address targetContract = incomingRequest.targetContract;
+        // Bare revert: keep Inbox under Spurious Dragon create-size.
+        if (targetContract == address(this)) revert();
         (bool encodedOk, bytes memory callData, bytes memory encodeErr) =
             _safeEncodeMethodCall(incomingRequest.methodCall);
 

@@ -170,9 +170,8 @@ abstract contract FeeManagerStubBase is ModuleCallBase {
 
         // ceil: gas * div / mul (skew invert) and remote→local price (matches InboxFeeQuoter Rounding.Ceil)
         uint256 targetGasRemoteUnits = _expectedMinFeeGasUnits(remoteMethodCallSize, remoteMin) + remoteMethodExecutionGas;
-        if (targetGasRemoteUnits > remoteMin.maxExecutionGas) {
-            revert FeeGasTooHigh(targetGasRemoteUnits, remoteMin.maxExecutionGas);
-        }
+        // Bare revert keeps Inbox under create-size; {InboxFeeQuoter} still returns FeeGasTooHigh.
+        if (targetGasRemoteUnits > remoteMin.maxExecutionGas) revert();
         uint256 mul = remoteMin.gasPriceMul;
         targetGasRemoteUnits = (targetGasRemoteUnits * uint256(remoteMin.gasPriceDiv) + mul - 1) / mul;
         uint256 callerGasLocalUnits = _expectedMinFeeGasUnits(callBackMethodCallSize, localMin) + callBackMethodExecutionGas;
