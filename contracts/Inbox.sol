@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable2Step.sol";
-import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-
 import "./InboxMiner.sol";
 
 /// @title Inbox
@@ -12,9 +9,9 @@ import "./InboxMiner.sol";
 /// chain, enabling a single deterministic address via CreateX `deployCreate3AndInit`.
 /// `chainId` and the real owner are configured once through {init}.
 /// Split deploy-then-initialize is unsafe; use CreateX `deployCreate3AndInit` or an equivalent atomic path.
-/// Do **not** call `_disableInitializers()` here: this contract *is* the live instance (no separate
-/// implementation), and `{init}` must remain callable exactly once via the atomic CreateX path.
-contract Inbox is InboxMiner, Initializable {
+/// One-shot init is `{_initInboxBase}`'s `_initialized` plus `{_initDeployer}` — not OZ {Initializable}
+/// (saves create-size; this contract *is* the live instance, not a proxy implementation).
+contract Inbox is InboxMiner {
     /// @dev `msg.sender` at construction (CreateX under atomic init, or the EOA in tests).
     address private _initDeployer;
 
@@ -31,10 +28,7 @@ contract Inbox is InboxMiner, Initializable {
     /// @param _chainId This chain's ID; pass `0` to use `block.chainid`.
     /// @param _mpcAbiReEncode COTI {MpcAbiReEncode} address, or `address(0)` on non-MPC chains.
     /// @param _feeManager Deployed {FeeManager} (required on every chain).
-    function init(address initialOwner, uint256 _chainId, address _mpcAbiReEncode, address _feeManager)
-        external
-        initializer
-    {
+    function init(address initialOwner, uint256 _chainId, address _mpcAbiReEncode, address _feeManager) external {
         // Bare revert keeps create bytecode under the Spurious Dragon limit.
         if (msg.sender != _initDeployer) revert();
         if (initialOwner == address(0)) {

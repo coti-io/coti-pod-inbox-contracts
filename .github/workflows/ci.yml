@@ -53,7 +53,7 @@ jobs:
         working-directory: coti-pod-inbox-contracts
         run: npx hardhat compile
 
-      - name: Bytecode size
+      - name: Bytecode size (Paris / Spurious Dragon 24_576)
         working-directory: coti-pod-inbox-contracts
         run: npm run check:bytecode-size
 

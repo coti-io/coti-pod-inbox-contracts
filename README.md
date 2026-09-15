@@ -51,7 +51,7 @@ npm run check:bytecode-size
 Hardhat suites use `NODE_OPTIONS=--max-old-space-size=8192` to avoid Node OOM during compile/test.
 Default `npm test` runs **batched** processes (`test:batched`) because a single mega-process can flake under memory pressure; use `test:all` only when you intentionally want one runner.
 
-GitHub Actions (`.github/workflows/ci.yml`) compiles, checks bytecode size, and runs `npm test`. On push to `main`, if secret `PEI_DISPATCH_PAT` is set, it `repository_dispatch`es `pod-contracts-changed` to **pod-ecosystem-integration** so ecosystem in-mem/sim jobs re-run against this SHA.
+GitHub Actions (`.github/workflows/ci.yml`) compiles **Paris**, checks bytecode size (Spurious Dragon 24_576 — COTI geth has no PUSH0), and runs `npm test`. On push to `main`, if secret `PEI_DISPATCH_PAT` is set, it `repository_dispatch`es `pod-contracts-changed` to **pod-ecosystem-integration** so ecosystem in-mem/sim jobs re-run against this SHA.
 
 **CI/CD secrets and how to create them:** see the canonical guide in PEI — [docs/CI-CD.md](https://github.com/coti-io/pod-ecosystem-integration/blob/main/docs/CI-CD.md) (this repo only needs `PEI_DISPATCH_PAT`).
 
@@ -59,7 +59,7 @@ For full-stack work (inbox + dApps + E2E tests), open the **pod-ecosystem-integr
 
 ## Deploy / init
 
-Inbox creation bytecode is chain-identical: the constructor sets a placeholder `Ownable(address(1))` owner and takes no arguments so CREATE3 addresses stay stable. Production deploys **must** use CreateX `deployCreate3AndInit` (or an equivalent atomic path) so `{init}` runs in the same transaction as creation—there is no safe split deploy-then-init window, and `_disableInitializers()` is intentionally **not** used because this contract *is* the live instance. Deploy helpers assert `owner() != address(1)` after init.
+Inbox creation bytecode is chain-identical: the constructor sets a placeholder `Ownable(address(1))` owner and takes no arguments so CREATE3 addresses stay stable. Compile target is **Paris** (no PUSH0). Production deploys **must** use CreateX `deployCreate3AndInit` (or an equivalent atomic path) so `{init}` runs in the same transaction as creation—there is no safe split deploy-then-init window. One-shot init is `{InboxBase._initialized}` plus constructor `{_initDeployer}` (not OZ `{Initializable}`). Deploy helpers assert `owner() != address(1)` after init.
 
 ## Networks
 

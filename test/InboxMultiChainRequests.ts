@@ -157,7 +157,7 @@ describe("Inbox per-target request isolation (>2 chains)", { concurrency: false,
     // A request destined for another chain (C) must be rejected by B.
     const cReqs = (await source.read.getRequests([TARGET_C, 0n, 1n])) as any[];
     await assert.rejects(
-      () =>
+      async () =>
         targetB.write.batchProcessRequests(
           await mineArgs(targetB, SOURCE_CHAIN_ID, cReqs.map(toMined)),
           {

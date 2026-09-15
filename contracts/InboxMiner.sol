@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
 import "@coti-io/coti-contracts/contracts/pod/IInboxMiner.sol";
 import "./InboxEstimateGas.sol";
 import "./MinerBase.sol";
@@ -11,7 +9,7 @@ import "./lib/MinerRejectLib.sol";
 /// @title InboxMiner
 /// @notice Miner-driven inbox: ingest mined payloads, execute targets, and collect fees.
 /// @dev Inherits {InboxEstimateGas} for {estimateExecutionGasForMiner} and estimate-mode hooks.
-abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, ReentrancyGuard {
+abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner {
     error NoncesNotContiguous();
     error RequestAlreadyProcessed();
 
@@ -21,6 +19,15 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
 
     /// @notice Gas reserved after an estimate subcall so {ExecutionGasEstimate} can always encode.
     uint256 private constant ESTIMATE_OUTER_RESERVE = 150_000;
+
+    uint256 private _reentrancyLock;
+
+    modifier nonReentrant() {
+        if (_reentrancyLock != 0) revert();
+        _reentrancyLock = 1;
+        _;
+        _reentrancyLock = 0;
+    }
 
     /// @notice Pause or unpause messaging (owner-only emergency stop).
     /// @param paused True to halt outbound sends and {batchProcessRequests}.
@@ -37,6 +44,10 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
 
     /// @inheritdoc IInboxMiner
     function hashBatch(uint256 sourceChainId, MinedRequest[] calldata mined) public view returns (bytes32) {
+        return _batchDigest(sourceChainId, mined);
+    }
+
+    function _batchDigest(uint256 sourceChainId, MinedRequest[] memory mined) private view returns (bytes32) {
         return keccak256(abi.encode(block.chainid, address(this), sourceChainId, keccak256(abi.encode(mined))));
     }
 
@@ -48,7 +59,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner, Reentr
         address expected = verifier;
         if (expected == address(0)) revert VerifierNotSet();
         if (verifierSignature.length != 65) revert InvalidVerifierSignature();
-        bytes32 digest = keccak256(abi.encode(block.chainid, address(this), sourceChainId, keccak256(abi.encode(mined))));
+        bytes32 digest = _batchDigest(sourceChainId, mined);
         bytes32 r;
         bytes32 s;
         uint8 v;

@@ -89,9 +89,9 @@ export default defineConfig({
     version: "0.8.28",
     preferWasm: false,
     settings: {
-      // shanghai (PUSH0): needed for Inbox ≤24_576 after reply/selector guards; viaIR + runs:1 + no metadata hash.
-      // Target chains (Sepolia / Fuji / COTI) support Shanghai; stay below Cancun unless transient storage is required.
-      evmVersion: "shanghai",
+      // paris: COTI geth rejects PUSH0. Inbox create-size must stay ≤24_576 without Shanghai opcodes.
+      // viaIR + runs:1 + no metadata hash.
+      evmVersion: "paris",
       viaIR: true,
       optimizer: {
         enabled: true,

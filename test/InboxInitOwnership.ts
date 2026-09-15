@@ -24,6 +24,12 @@ describe("Inbox init ownership", { concurrency: false, timeout: 1_800_000 }, () 
     const after = (await inbox.read.owner()) as `0x${string}`;
     assert.equal(after.toLowerCase(), deployer.toLowerCase());
     assert.notEqual(after.toLowerCase(), PLACEHOLDER_OWNER);
+
+    await assert.rejects(
+      () =>
+        inbox.write.init([deployer, 1000n, mpcAbiReEncodeOf(inbox), feeManagerOf(inbox)], { account: deployer }),
+      /AlreadyInitialized/
+    );
   });
 
   it("rejects init from a non-deployer account", { timeout: 600_000 }, async () => {

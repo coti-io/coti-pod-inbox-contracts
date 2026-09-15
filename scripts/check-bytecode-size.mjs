@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
  * Fail if any production contract's deployedBytecode exceeds the Spurious Dragon create limit (24_576 bytes).
+ * Compile with Hardhat `evmVersion: "paris"` (CI size gate; COTI geth rejects PUSH0).
  * Usage: node scripts/check-bytecode-size.mjs
  */
 import fs from "node:fs";

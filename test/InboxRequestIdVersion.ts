@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { toHex } from "viem";
 import { network } from "hardhat";
 import { deployTestInbox, mpcAbiReEncodeOf, feeManagerOf } from "../scripts/deploy-test-inbox.js";
+import { enableInboxAuth, mineArgs } from "../scripts/test-helpers/verifier.js";
 import { packRequestId, REQUEST_ID_VERSION } from "./packRequestId.js";
 
 const SOURCE_CHAIN_ID = 1000n;
@@ -56,6 +57,7 @@ describe("request id Inbox generation", { concurrency: false, timeout: 600_000 }
     });
     await inbox.write.updateMinFeeConfigs([{ ...FEE }, { ...FEE }], { account: deployer });
     await inbox.write.addMiner([deployer], { account: deployer });
+    await enableInboxAuth(inbox, deployer);
 
     // Legacy layout: no generation byte (version nibble = 0).
     const legacyId = toHex((SOURCE_CHAIN_ID << 192n) | (TARGET_CHAIN_ID << 128n) | 1n, { size: 32 });
@@ -78,8 +80,8 @@ describe("request id Inbox generation", { concurrency: false, timeout: 600_000 }
     };
 
     await assert.rejects(
-      () =>
-        inbox.write.batchProcessRequests([SOURCE_CHAIN_ID, [mined]], {
+      async () =>
+        inbox.write.batchProcessRequests(await mineArgs(inbox, SOURCE_CHAIN_ID, [mined]), {
           account: deployer,
           gas: 2_000_000n,
         }),
