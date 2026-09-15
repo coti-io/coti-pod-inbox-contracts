@@ -12,7 +12,11 @@ import "./InboxMiner.sol";
 /// One-shot init is `{_initInboxBase}`'s `_initialized` plus `{_initDeployer}` — not OZ {Initializable}
 /// (saves create-size; this contract *is* the live instance, not a proxy implementation).
 contract Inbox is InboxMiner {
-    /// @dev `msg.sender` at construction (CreateX under atomic init, or the EOA in tests).
+    /// @dev Canonical CreateX. CREATE3 constructor `msg.sender` is the Create3 proxy;
+    ///      `deployCreate3AndInit` then calls {init} from this address.
+    address private constant CREATEX = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;
+
+    /// @dev `msg.sender` at construction (Create3 proxy under CreateX, or the EOA in tests).
     address private _initDeployer;
 
     /// @dev Placeholder owner until {init}; fixed address keeps creation bytecode identical on every chain.
@@ -30,7 +34,7 @@ contract Inbox is InboxMiner {
     /// @param _feeManager Deployed {FeeManager} (required on every chain).
     function init(address initialOwner, uint256 _chainId, address _mpcAbiReEncode, address _feeManager) external {
         // Bare revert keeps create bytecode under the Spurious Dragon limit.
-        if (msg.sender != _initDeployer) revert();
+        if (msg.sender != _initDeployer && msg.sender != CREATEX) revert();
         if (initialOwner == address(0)) {
             revert OwnableInvalidOwner(initialOwner);
         }
