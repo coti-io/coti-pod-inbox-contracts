@@ -45,7 +45,7 @@ contract FeeManager {
     error FeeGasTooHigh(uint256 feeGas, uint256 maxGas);
     /// @notice Respond/raise payload weight exceeds {maxReplyMethodCallBytes}.
     error ResponseOutOfBounds(uint256 size, uint256 maxSize);
-    /// @notice Reply max was set to zero.
+    /// @notice Reply max was zero or above {PROTOCOL_MAX_METHOD_CALL_BYTES}.
     error MaxReplyMethodCallBytesInvalid(uint32 maxBytes);
     /// @notice {setPriceOracle} rejected the zero address (would brick fee-validated sends).
     error ZeroPriceOracle();
@@ -133,7 +133,7 @@ contract FeeManager {
 
     /// @notice Set the respond/raise payload-weight cap.
     function setMaxReplyMethodCallBytes(uint32 maxBytes) external {
-        if (maxBytes == 0) {
+        if (maxBytes == 0 || maxBytes > PROTOCOL_MAX_METHOD_CALL_BYTES) {
             revert MaxReplyMethodCallBytesInvalid(maxBytes);
         }
         LibFeeStorage.get().maxReplyMethodCallBytes = maxBytes;

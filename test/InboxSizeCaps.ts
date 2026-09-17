@@ -182,6 +182,12 @@ describe("Size caps and miner reject", { concurrency: false, timeout: 600_000 },
       () => target.write.setMaxReplyMethodCallBytes([0], { account: deployer }),
       /MaxReplyMethodCallBytesInvalid/
     );
+    await assert.rejects(
+      () => target.write.setMaxReplyMethodCallBytes([32_769], { account: deployer }),
+      /MaxReplyMethodCallBytesInvalid/
+    );
+    await target.write.setMaxReplyMethodCallBytes([32_768], { account: deployer });
+    assert.equal(BigInt(await target.read.maxReplyMethodCallBytes()), 32_768n);
   });
 
   it("helper builds reject methodCall; isMinerRejectMethodCall round-trips", async () => {

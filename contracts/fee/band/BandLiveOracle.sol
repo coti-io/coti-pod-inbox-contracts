@@ -29,10 +29,18 @@ contract BandLiveOracle is IPodPriceOracle, ILivePriceMetaReader, Ownable {
     event MaxStalenessUpdated(uint256 previous, uint256 current);
     event FeedUpdated(address indexed token, bytes32 bandBase, bytes32 bandQuote);
 
+    /// @notice Ownership cannot be renounced (feed admin must remain reachable).
+    error OwnershipCannotBeRenounced();
+
     /// @param initialOwner Admin for feed configuration.
     constructor(address initialOwner, address _bandStdRef, uint256 _maxStaleness) Ownable(initialOwner) {
         bandStdRef = _bandStdRef;
         maxStaleness = _maxStaleness;
+    }
+
+    /// @notice Ownership cannot be renounced (admin must remain reachable).
+    function renounceOwnership() public pure override {
+        revert OwnershipCannotBeRenounced();
     }
 
     /// @notice Set the Band StdReference contract.

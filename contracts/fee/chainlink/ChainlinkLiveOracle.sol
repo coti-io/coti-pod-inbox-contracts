@@ -23,9 +23,17 @@ contract ChainlinkLiveOracle is IPodPriceOracle, ILivePriceMetaReader, Ownable {
     /// @notice {setMaxStaleness} was called with zero (disables max-age entirely via setter).
     error ZeroMaxStaleness();
 
+    /// @notice Ownership cannot be renounced (feed admin must remain reachable).
+    error OwnershipCannotBeRenounced();
+
     /// @param initialOwner Admin for feed configuration.
     constructor(address initialOwner, uint256 _maxStaleness) Ownable(initialOwner) {
         maxStaleness = _maxStaleness;
+    }
+
+    /// @notice Ownership cannot be renounced (admin must remain reachable).
+    function renounceOwnership() public pure override {
+        revert OwnershipCannotBeRenounced();
     }
 
     /// @notice Set max feed staleness (`0` not allowed via this setter).

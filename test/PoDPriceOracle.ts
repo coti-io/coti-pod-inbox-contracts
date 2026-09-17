@@ -179,6 +179,17 @@ describe("PoDPriceOracle", { concurrency: 1 }, async () => {
     assert.equal(await oracle.read.getLocalTokenPriceUSD(), cached);
   });
 
+  it("renounceOwnership reverts on cache oracle and live adapters", async () => {
+    const feed = await viem.deployContract("MockChainlinkAggregator", [8, ETH_8], { client: c });
+    const { oracle, live } = await deploy("chainlink", feed.address);
+    const adapter = await viem.getContractAt("ChainlinkLiveOracle", live, { client: c });
+    await assert.rejects(() => oracle.write.renounceOwnership({ account: owner }), /OwnershipCannotBeRenounced/);
+    await assert.rejects(() => adapter.write.renounceOwnership({ account: owner }), /OwnershipCannotBeRenounced/);
+    const { live: bandLive } = await deploy("band");
+    const band = await viem.getContractAt("BandLiveOracle", bandLive, { client: c });
+    await assert.rejects(() => band.write.renounceOwnership({ account: owner }), /OwnershipCannotBeRenounced/);
+  });
+
   it("failed pull does not advance lastFetchTimestamp (gate stays open)", async () => {
     const feed = await viem.deployContract("MockChainlinkAggregator", [8, ETH_8], { client: c });
     const ad = await viem.deployContract("ChainlinkLiveOracle", [owner, 3600n], { client: c });

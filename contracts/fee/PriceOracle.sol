@@ -52,6 +52,9 @@ contract PriceOracle is Ownable {
     /// @notice Price admin cannot be the zero address.
     error ZeroPriceAdmin();
 
+    /// @notice Ownership cannot be renounced (price admin path must remain reachable).
+    error OwnershipCannotBeRenounced();
+
     /// @notice Inbox leg tokens were (re)configured.
     event InboxTokensUpdated(address indexed previousLocal, address indexed previousRemote, address indexed newLocal, address newRemote);
 
@@ -81,6 +84,11 @@ contract PriceOracle is Ownable {
     /// @param initialOwner {Ownable} owner; also initial {priceAdmin}.
     constructor(address initialOwner) Ownable(initialOwner) {
         priceAdmin = initialOwner;
+    }
+
+    /// @notice Ownership cannot be renounced (admin must remain reachable).
+    function renounceOwnership() public pure override {
+        revert OwnershipCannotBeRenounced();
     }
 
     /// @notice Configure inbox leg tokens (e.g. WETH local, COTI remote).

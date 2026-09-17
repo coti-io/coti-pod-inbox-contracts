@@ -23,7 +23,7 @@ Reply legs (`respond` / `raise`) use the same weight units via `maxReplyMethodCa
 |---|---|
 | `FeeConfig.maxMethodCallBytes` | `8192` (protocol ceiling `32_768`) |
 | `FeeConfig.maxExecutionGas` | `5_000_000` (variable) / `25_000_000` ceiling with shipped constant-fee below it (`20_000_000`) |
-| `maxReplyMethodCallBytes` | `8192` |
+| `maxReplyMethodCallBytes` | `8192` (setter ceiling `32_768`) |
 
 Protocol ceilings (all chains, enforced in `FeeManager._requireValidFeeConfig`):
 
@@ -32,7 +32,7 @@ Protocol ceilings (all chains, enforced in `FeeManager._requireValidFeeConfig`):
 | `PROTOCOL_MAX_METHOD_CALL_BYTES` | `32_768` |
 | `PROTOCOL_MAX_EXECUTION_GAS` | `25_000_000` |
 
-These apply to **constant-fee and variable-fee** templates. `constantFee > 0` does not allow omitting the two max fields. On-chain validation also requires `maxExecutionGas >= constantFee` when constant mode is used, and both max fields must stay within the protocol ceilings.
+These apply to **constant-fee and variable-fee** templates **and** `{setMaxReplyMethodCallBytes}`. `constantFee > 0` does not allow omitting the two max fields. On-chain validation also requires `maxExecutionGas >= constantFee` when constant mode is used, and both max fields must stay within the protocol ceilings.
 
 `FeeConfig` fields and `maxReplyMethodCallBytes` are **`uint32`** (seven fee fields pack into **one storage slot** per local/remote config). Values must stay ≤ `type(uint32).max` (~4.29e9) and within the protocol ceilings above.
 
