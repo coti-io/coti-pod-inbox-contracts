@@ -408,6 +408,8 @@ contract InboxBase is IInbox, FeeManagerStubBase {
 
         // Linked return leg for a request that registered an error handler (app `raise`).
         // Only Inbox creates linked legs (`raise` / `respond` / system-error); public sends use `sourceRequestId = 0`.
+        // Success callbacks (`respond`) also have a non-zero errorSelector on the original — do not call
+        // this from a success handler (it will report Exception). Branch only from errorSelector entrypoints.
         return InboxErrorType.Exception;
     }
 
@@ -758,7 +760,8 @@ contract InboxBase is IInbox, FeeManagerStubBase {
                 if eq(mload(dataPtr), 0x20) {
                     let len := mload(add(dataPtr, 0x20))
                     // Content must fit (ignore ABI right-padding).
-                    if iszero(gt(add(0x40, len), retLen)) {
+                    // Compare `len` to `retLen - 0x40` (safe: retLen > 0x3f). `add(0x40, len)` can wrap.
+                    if iszero(gt(len, sub(retLen, 0x40))) {
                         ok := 1
                         // `bytes` memory layout is length || data — already at offset 0x20 of the payload.
                         decoded := add(dataPtr, 0x20)
