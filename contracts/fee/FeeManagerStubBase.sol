@@ -161,6 +161,8 @@ abstract contract FeeManagerStubBase is ModuleCallBase {
         FeeConfig memory remoteMin = _fromLib($.remoteMinFeeConfig);
 
         // Unconfigured templates keep mul/div at 0 until updateMinFeeConfigs — do not divide.
+        // Both configs are written together today, so the remote guard usually trips first;
+        // keep the local check so a future split write cannot divide by zero.
         if (remoteMin.gasPriceMul == 0 || remoteMin.gasPriceDiv == 0) {
             revert FeeConfigInvalid(_toLib(remoteMin));
         }

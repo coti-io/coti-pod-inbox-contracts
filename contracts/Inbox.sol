@@ -28,6 +28,7 @@ contract Inbox is InboxMiner {
     /// @notice One-time initializer: sets `chainId`, owner, and DELEGATECALL helpers.
     /// @dev Intended to run atomically inside CreateX `deployCreate3AndInit` (no front-run window).
     ///      Caller must be the constructor deployer so a non-atomic init cannot be claimed by a stranger.
+    ///      Helpers are not rotatable after this call; a module fix is an Inbox redeploy.
     /// @param initialOwner Address that becomes the {Ownable} owner (typically the deployer EOA).
     /// @param _chainId This chain's ID; pass `0` to use `block.chainid`.
     /// @param _mpcAbiReEncode COTI {MpcAbiReEncode} address, or `address(0)` on non-MPC chains.

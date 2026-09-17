@@ -79,6 +79,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner {
 
     /// @inheritdoc IInboxMiner
     /// @dev Reject items require targetContract==0 and MinerRejectLib.parse success; nonzero target never rejects.
+    ///      `mined` is ABI-decoded into memory before the per-item caps; those caps still run before execute.
     function batchProcessRequests(
         uint256 sourceChainId,
         MinedRequest[] memory mined,
@@ -126,6 +127,8 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner {
                 ++allowedNonce;
             }
             Request storage incomingRequest = incomingRequests[requestId];
+            // Contiguity already rejects a previously mined nonce; this guards a colliding id
+            // if REQUEST_ID_VERSION / packing ever changes. Not interchangeable with the nonce check.
             if (incomingRequest.requestId != bytes32(0)) revert RequestAlreadyProcessed();
             if (minedRequest.sourceContract == address(0)) revert InvalidSourceContract();
 
@@ -179,6 +182,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner {
                 });
 
                 incomingRequests[requestId] = newIncomingRequest;
+                // `incomingRequest` aliases that slot; {_executeIncomingRequest} reads the write above.
                 (
                     bytes4 methodSelector,
                     bytes32 methodCallHash,
@@ -234,6 +238,7 @@ abstract contract InboxMiner is InboxEstimateGas, MinerBase, IInboxMiner {
     ) private {
         MpcMethodCall memory emptyCall;
 
+        // Fills the slot aliased by `incomingRequest` (taken empty at the start of this item).
         incomingRequests[requestId] = Request({
             requestId: requestId,
             targetChainId: sourceChainId,

@@ -2,11 +2,12 @@
 pragma solidity ^0.8.20;
 
 /// @title ModuleCallBase
-/// @notice Holds module addresses and generic DELEGATECALL / STATICCALL helpers.
-/// @dev Reusable when estimate/execute/etc. are extracted later. Fee-specific code only
-///      passes {feeManager} into {_delegateModule} / {_staticModule}.
+/// @notice Holds the FeeManager address and a DELEGATECALL helper (Inbox storage context).
+/// @dev Fee-specific code passes {feeManager} into {_delegateModule}. No STATICCALL helper:
+///      STATICCALL would read the module's empty storage, not Inbox ERC-7201.
 abstract contract ModuleCallBase {
     /// @notice Deployed {FeeManager} implementation (DELEGATECALL target). Apps still call Inbox.
+    /// @dev Immutable after Inbox {init}; rotating it requires redeploying the Inbox.
     address public feeManager;
 
     /// @notice Module address was zero when a call was required.
@@ -18,17 +19,6 @@ abstract contract ModuleCallBase {
     function _delegateModule(address module, bytes memory callData) internal returns (bytes memory) {
         if (module == address(0)) revert ModuleNotConfigured(module);
         (bool success, bytes memory returndata) = module.delegatecall(callData);
-        if (!success) {
-            _bubbleRevert(returndata);
-        }
-        return returndata;
-    }
-
-    /// @dev STATICCALL into `module` with `callData`; bubbles revert data.
-    /// @notice Do not use for Inbox fee-state getters — STATICCALL runs in the module's storage context.
-    function _staticModule(address module, bytes memory callData) internal view returns (bytes memory) {
-        if (module == address(0)) revert ModuleNotConfigured(module);
-        (bool success, bytes memory returndata) = module.staticcall(callData);
         if (!success) {
             _bubbleRevert(returndata);
         }

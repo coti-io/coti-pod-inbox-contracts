@@ -63,7 +63,6 @@ contract MpcAbiReEncode {
             // Reject high-byte datatype malleability (only low byte is meaningful).
             uint64 rawType = uint64(data.datatypes[i]);
             require(rawType <= uint64(uint8(type(MpcDataType).max)), "MpcAbiReEncode: bad datatype");
-            require(data.datatypes[i] == bytes8(rawType), "MpcAbiReEncode: datatype alias");
             MpcDataType dataType = MpcDataType(uint8(rawType));
             (bytes memory encodedArg, bool dynamicType, uint words, bytes memory packedCt) =
                 _normalizeArg(argData, dataType);

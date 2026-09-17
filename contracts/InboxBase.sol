@@ -63,8 +63,6 @@ contract InboxBase is IInbox, FeeManagerStubBase {
     error NonceTooLarge();
     /// @notice Mined request id carries a different Inbox generation than this deployment.
     error RequestIdVersionMismatch(uint8 got, uint8 expected);
-    error RawCallHasDatatypes();
-    error RawCallHasDatalens();
     error MpcAbiReEncodeRequired();
     /// @notice Circuit breaker: outbound sends / inbound processing are paused.
     error MessageProcessingPaused();
@@ -75,6 +73,7 @@ contract InboxBase is IInbox, FeeManagerStubBase {
     /// @dev Nonce width after reserving 8 bits for {REQUEST_ID_VERSION} in the low 128-bit half.
     uint256 private constant _REQUEST_ID_NONCE_MASK = (uint256(1) << 120) - 1;
     /// @notice Storage-free re-encode helper; Inbox DELEGATECALLs it (COTI). Zero on non-MPC chains.
+    /// @dev Immutable after {init}; rotating it requires redeploying this Inbox.
     address public mpcAbiReEncode;
 
     /// @notice CMS batch verifier. {batchProcessRequests} recovers this address from `verifierSignature`.
@@ -174,6 +173,7 @@ contract InboxBase is IInbox, FeeManagerStubBase {
     event FeeExecutionSettled(bytes32 indexed requestId, uint256 gasUsed, uint256 gasRemainingApprox);
 
     /// @dev One-time base initializer. Sets `chainId`, helpers, fee defaults, and trips the init guard.
+    ///      `mpcAbiReEncode` / `feeManager` are not rotatable — a module fix is an Inbox redeploy.
     /// @param _chainId This chain's ID; pass `0` to use `block.chainid`.
     /// @param _mpcAbiReEncode COTI re-encode contract (`address(0)` on non-MPC chains).
     /// @param _feeManager Deployed {FeeManager} (required; DELEGATECALL target for fee logic).
@@ -278,11 +278,13 @@ contract InboxBase is IInbox, FeeManagerStubBase {
         if (originalSenderContract == address(0)) revert OriginalSenderNotFound();
 
         _tagEstimateOutboundReply(isRaise);
+        // Reply legs are one-way: no further error handler. Do not copy the source app's
+        // `errorSelector` onto this outbound (it is not the mother's ABI).
         bytes32 outboundRequestId = _sendOneWayMessage(
             currentContext.remoteChainId,
             originalSenderContract,
             replyMethodCall,
-            incomingRequest.errorSelector,
+            bytes4(0),
             incomingRequestId,
             incomingRequest.callerFee,
             0,
@@ -650,6 +652,8 @@ contract InboxBase is IInbox, FeeManagerStubBase {
     }
 
     /// @dev Compact log metadata for {MessageSent} and {MessageReceived}.
+    ///      `uint16` counts cannot overflow: structural size is charged before emit and
+    ///      `maxMethodCallBytes` is capped at 32_768 (≤ 1_024 entries of 32 bytes).
     function _methodCallLogData(MpcMethodCall memory methodCall)
         internal
         pure
@@ -703,16 +707,6 @@ contract InboxBase is IInbox, FeeManagerStubBase {
         if (got != REQUEST_ID_VERSION) {
             revert RequestIdVersionMismatch(got, REQUEST_ID_VERSION);
         }
-    }
-
-    /// @dev Raw calldata passthrough if selector is zero; otherwise DELEGATECALL {MpcAbiReEncode}.
-    function _encodeMethodCall(MpcMethodCall memory methodCall) internal returns (bytes memory) {
-        if (methodCall.selector == bytes4(0)) {
-            if (methodCall.datatypes.length != 0) revert RawCallHasDatatypes();
-            if (methodCall.datalens.length != 0) revert RawCallHasDatalens();
-            return methodCall.data;
-        }
-        return _delegateReEncodeWithGt(methodCall);
     }
 
     /// @dev Non-reverting encode wrapper for inbound execution.
@@ -769,20 +763,6 @@ contract InboxBase is IInbox, FeeManagerStubBase {
                 }
             }
         }
-    }
-
-    function _delegateReEncodeWithGt(MpcMethodCall memory methodCall) private returns (bytes memory) {
-        address target = mpcAbiReEncode;
-        if (target == address(0)) revert MpcAbiReEncodeRequired();
-        (bool success, bytes memory ret) = target.delegatecall(
-            abi.encodeWithSelector(MpcAbiReEncode.reEncodeWithGt.selector, methodCall)
-        );
-        if (!success) {
-            assembly {
-                revert(add(ret, 32), mload(ret))
-            }
-        }
-        return abi.decode(ret, (bytes));
     }
 
     /// @dev Records an encode failure and emits {ErrorReceived}.

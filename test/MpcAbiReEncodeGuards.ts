@@ -20,7 +20,7 @@ describe("MpcAbiReEncode guards (L-01/L-02/L-16)", { concurrency: 1 }, async () 
     const emptyBytes = encodeAbiParameters([{ type: "bytes" }], ["0x"]);
     await assert.rejects(
       () => harness.write.encodeOneArgViaDelegate(["0x12345678", emptyBytes, BYTES_ALIASED]),
-      (err: unknown) => String(err).includes("datatype alias") || String(err).includes("reverted")
+      (err: unknown) => String(err).includes("bad datatype") || String(err).includes("reverted")
     );
   });
 

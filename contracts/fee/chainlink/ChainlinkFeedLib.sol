@@ -7,7 +7,9 @@ import "./AggregatorV3Interface.sol";
 
 /// @title ChainlinkFeedLib
 /// @notice Read Chainlink Data Feeds and normalize answers to 18-decimal USD per whole token.
-/// @dev Never reverts: stale, incomplete rounds, non-positive answers, and failed calls return `(false, 0)`.
+/// @dev Stale, incomplete rounds, non-positive answers, and failed calls return `(false, 0)`.
+///      That is not a gas-grief guarantee: a feed that consumes almost all remaining gas can
+///      still OOG the caller after EIP-150.
 library ChainlinkFeedLib {
     /// @dev Scale matching {PriceOracle.PRICE_SCALE}.
     uint256 internal constant PRICE_SCALE = 10 ** 18;
@@ -112,6 +114,7 @@ library ChainlinkFeedLib {
             }
             return answer * scale;
         }
+        // High-decimal feeds can floor a tiny answer to 0; callers treat 0 as `ok = false`.
         return Math.mulDiv(answer, PRICE_SCALE, 10 ** decimals);
     }
 }

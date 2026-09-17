@@ -217,5 +217,7 @@ describe("two-way reply guards (respond/raise)", {
 
     const outLen = await target.read.getRequestsLen([SOURCE_CHAIN_ID]);
     assert.equal(outLen, 1n);
+    const outbound = (await target.read.getRequests([SOURCE_CHAIN_ID, 0n, 1n])) as { errorSelector: `0x${string}` }[];
+    assert.equal(outbound[0].errorSelector, "0x00000000");
   });
 });
